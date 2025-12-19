@@ -37,11 +37,11 @@ Works with any MCP-compatible client including Claude Desktop, VS Code (Cline), 
 
 ```bash
 # Using pipx (recommended)
-pipx install git+https://github.com/tjnull/ludus-mcp-python.git
+pipx install git+https://github.com/tjnull/Ludus-FastMCP
 
 # From source
-git clone https://github.com/tjnull/ludus-mcp-python.git
-cd ludus-mcp-python
+git clone https://github.com/tjnull/Ludus-FastMCP
+cd Ludus-FastMCP
 pip install -e .
 ```
 
