@@ -142,7 +142,13 @@ def _initialize_mcp_server() -> FastMCP:
                     print(f"  ⏳ Loading {module_name}...", end="", file=sys.stderr, flush=True)
 
                 module_server = create_func(client)
-                asyncio.run(mcp.import_server(module_server))
+
+                # Use mount() instead of asyncio.run(mcp.import_server()) to avoid event loop conflicts.
+                # When called from async contexts (e.g., --list-tools runs via asyncio.run(list_tools_async())),
+                # attempting to create a new event loop with asyncio.run() fails because an event loop is
+                # already running in the current thread. mount() performs synchronous tool registration without
+                # requiring a new event loop, making it safe to call from both sync and async contexts.
+                mcp.mount(module_server)
                 loaded_modules.append(module_name)
 
                 if _verbose_mode:
