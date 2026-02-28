@@ -64,10 +64,8 @@ def create_batch_tools(client: LudusAPIClient) -> FastMCP:
             """Wrapper to handle errors for individual VMs."""
             try:
                 result = await handler.create_snapshot(
-                    vm_name=vm_name,
-                    name=snapshot_name,
-                    description=description,
-                    user_id=user_id,
+                    {"vm_name": vm_name, "name": snapshot_name, "description": description},
+                    user_id,
                 )
                 return {
                     "vm_name": vm_name,
@@ -123,7 +121,8 @@ def create_batch_tools(client: LudusAPIClient) -> FastMCP:
         async def rollback_safe(vm_name: str):
             try:
                 result = await handler.rollback_snapshot(
-                    vm_name=vm_name, name=snapshot_name, user_id=user_id
+                    {"vm_name": vm_name, "name": snapshot_name},
+                    user_id,
                 )
                 return {
                     "vm_name": vm_name,
@@ -175,7 +174,8 @@ def create_batch_tools(client: LudusAPIClient) -> FastMCP:
         async def remove_safe(vm_name: str):
             try:
                 result = await handler.remove_snapshot(
-                    vm_name=vm_name, name=snapshot_name, user_id=user_id
+                    {"vm_name": vm_name, "name": snapshot_name},
+                    user_id,
                 )
                 return {"vm_name": vm_name, "status": "success", "result": format_tool_response(result)}
             except Exception as e:
