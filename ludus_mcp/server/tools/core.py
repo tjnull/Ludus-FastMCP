@@ -364,7 +364,7 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
             Rollback result
         """
         handler = registry.get_handler("snapshot", SnapshotHandler)
-        result = await handler.rollback_snapshot({"vm_name": vm_name, "snapshot_name": snapshot_name}, user_id)
+        result = await handler.rollback_snapshot({"vm_name": vm_name, "name": snapshot_name}, user_id)
         return format_tool_response(result)
 
     @mcp.tool()
@@ -384,7 +384,7 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
             Removal result
         """
         handler = registry.get_handler("snapshot", SnapshotHandler)
-        result = await handler.remove_snapshot({"vm_name": vm_name, "snapshot_name": snapshot_name}, user_id)
+        result = await handler.remove_snapshot({"vm_name": vm_name, "name": snapshot_name}, user_id)
         return format_tool_response(result)
 
     # ==================== POWER TOOLS ====================
