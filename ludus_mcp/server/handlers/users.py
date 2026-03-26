@@ -31,6 +31,7 @@ class UserHandler:
         name: str | None = None,
         proxmox_username: str | None = None,
         proxmox_password: str | None = None,
+        email: str | None = None,
     ) -> dict[str, Any]:
         """
         Add a new user to Ludus.
@@ -40,6 +41,7 @@ class UserHandler:
             name: Display name for the user
             proxmox_username: Proxmox username for the user
             proxmox_password: Proxmox password for the user
+            email: Email address (required for v2)
 
         Returns:
             User creation result
@@ -50,7 +52,18 @@ class UserHandler:
             name=name,
             proxmox_username=proxmox_username,
             proxmox_password=proxmox_password,
+            email=email,
         )
+
+    async def provision_oauth2_user(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Provision an OAuth2 user (v2 only)."""
+        logger.info("Provisioning OAuth2 user")
+        return await self.client.provision_oauth2_user(config)
+
+    async def get_user_memberships(self) -> list[dict[str, Any]]:
+        """Get current user's group memberships (v2 only)."""
+        logger.debug("Getting user memberships")
+        return await self.client.get_user_memberships()
 
     async def remove_user(self, user_id: str) -> dict[str, Any]:
         """

@@ -6,6 +6,7 @@ from ludus_mcp.core.client import LudusAPIClient
 from ludus_mcp.server.handlers.template_advanced import TemplateAdvancedHandler
 from ludus_mcp.server.handlers.template_builder import TemplateBuilder
 from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_response
+from ludus_mcp.utils.version_guard import require_v2
 
 
 def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
@@ -315,6 +316,70 @@ def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
         """
         handler = registry.get_handler("template_advanced", TemplateAdvancedHandler)
         result = await handler.optimize_template(template_id, user_id)
+        return format_tool_response(result)
+
+    # ==================== ANSIBLE V2 TOOLS ====================
+
+    @mcp.tool()
+    async def move_ansible_role_scope(role_name: str, scope: str) -> dict:
+        """Move an Ansible role's scope (Ludus 2.0 only).
+
+        Args:
+            role_name: Name of the role to move
+            scope: New scope for the role
+
+        Returns:
+            Move result
+        """
+        guard = require_v2(client, "Ansible Role Scope Management")
+        if guard:
+            return guard
+        result = await client.move_role_scope(role_name, scope)
+        return format_tool_response(result)
+
+    @mcp.tool()
+    async def get_ansible_role_vars(role_name: str) -> dict:
+        """Get variables for an Ansible role (Ludus 2.0 only).
+
+        Args:
+            role_name: Name of the role
+
+        Returns:
+            Role variables
+        """
+        guard = require_v2(client, "Ansible Role Variables")
+        if guard:
+            return guard
+        result = await client.get_role_vars(role_name)
+        return format_tool_response(result)
+
+    @mcp.tool()
+    async def list_subscription_roles() -> list[dict]:
+        """List available subscription roles (Ludus 2.0 Enterprise only).
+
+        Returns:
+            List of subscription roles
+        """
+        guard = require_v2(client, "Subscription Roles")
+        if guard:
+            return guard
+        result = await client.list_subscription_roles()
+        return format_tool_response(result)
+
+    @mcp.tool()
+    async def install_subscription_roles(roles: list[str]) -> dict:
+        """Install subscription roles (Ludus 2.0 Enterprise only).
+
+        Args:
+            roles: List of role names to install
+
+        Returns:
+            Installation result
+        """
+        guard = require_v2(client, "Subscription Roles")
+        if guard:
+            return guard
+        result = await client.install_subscription_roles(roles)
         return format_tool_response(result)
 
     return mcp

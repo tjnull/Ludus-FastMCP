@@ -1,10 +1,10 @@
 # Tools Reference
 
-Complete reference for all 157 tools available in Ludus FastMCP, organized by category.
+Complete reference for all tools available in Ludus FastMCP, organized by category.
 
 ## Overview
 
-Ludus FastMCP provides 157 tools across 15 modules:
+Ludus FastMCP provides tools across 20 modules. Tools marked with **(v2)** require a Ludus 2.0 server.
 
 | Category | Tools | Description |
 |----------|-------|-------------|
@@ -23,6 +23,11 @@ Ludus FastMCP provides 157 tools across 15 modules:
 | AI Config Generation | 8 | Natural language to YAML |
 | Profile Transformation | 5 | Adversary/defender profiles |
 | Role Management | 11 | Ansible Galaxy, custom roles |
+| Blueprints **(v2)** | ~13 | Blueprint lifecycle, sharing, access control |
+| Groups **(v2)** | ~9 | Group management, membership, range access |
+| VM Management **(v2)** | ~2 | VM destruction, console tickets |
+| Diagnostics & Migration **(v2)** | ~7 | Diagnostics, license, SQLite/SDN migration |
+| Enhanced Range Management **(v2)** | ~7 | Range creation, user assignment, defaults |
 
 ## Core Operations
 
@@ -291,6 +296,98 @@ Tools for sharing and collaboration.
 | `publish_scenario` | Publish scenario to community |
 | `import_community_scenario` | Import community scenario |
 | `list_shared_resources` | List shared resources |
+
+## v2-Only Tools
+
+The following tool categories are available only when connected to a Ludus v2 server. They are always visible in the tool list, but calling them against a v1 server will return an error indicating that Ludus v2 is required.
+
+### Blueprints
+
+Tools for managing range blueprints (v2 only).
+
+| Tool | Description |
+|------|-------------|
+| `list_blueprints` | List all available blueprints |
+| `create_blueprint_from_range` | Create a blueprint from an existing range |
+| `apply_blueprint` | Apply a blueprint to create a new range |
+| `copy_blueprint` | Copy an existing blueprint |
+| `delete_blueprint` | Delete a blueprint |
+| `get_blueprint_config` | Get blueprint configuration details |
+| `update_blueprint_config` | Update blueprint configuration |
+| `share_blueprint_with_user` | Share a blueprint with a specific user |
+| `unshare_blueprint_with_user` | Revoke a user's access to a blueprint |
+| `share_blueprint_with_group` | Share a blueprint with a group |
+| `unshare_blueprint_with_group` | Revoke a group's access to a blueprint |
+| `list_blueprint_access` | List users and groups with access to a blueprint |
+
+### Groups
+
+Tools for managing user groups (v2 only).
+
+| Tool | Description |
+|------|-------------|
+| `list_groups` | List all groups |
+| `create_group` | Create a new group |
+| `delete_group` | Delete a group |
+| `add_user_to_group` | Add a user to a group |
+| `remove_user_from_group` | Remove a user from a group |
+| `list_group_members` | List members of a group |
+| `add_range_to_group` | Grant a group access to a range |
+| `remove_range_from_group` | Revoke a group's access to a range |
+| `list_group_ranges` | List ranges accessible by a group |
+
+### VM Management
+
+Additional VM lifecycle tools (v2 only).
+
+| Tool | Description |
+|------|-------------|
+| `destroy_vm` | Permanently destroy a specific VM |
+| `get_console_ticket` | Get a console access ticket for a VM |
+
+### Diagnostics and Migration
+
+Tools for server diagnostics and migration tasks (v2 only).
+
+| Tool | Description |
+|------|-------------|
+| `run_diagnostics` | Run server diagnostics and return results |
+| `whoami` | Return the currently authenticated user and server info |
+| `get_license` | Get Ludus license information |
+| `migrate_sqlite` | Run SQLite database migration |
+| `get_sdn_migration_status` | Check status of SDN migration |
+| `migrate_sdn` | Perform SDN migration |
+| `setup_sdn` | Set up software-defined networking |
+
+### Enhanced Range Management (v2)
+
+Extended range tools available on v2 servers (v2 only).
+
+| Tool | Description |
+|------|-------------|
+| `create_range` | Create a new empty range |
+| `assign_user_to_range` | Assign a user to a range |
+| `revoke_user_from_range` | Revoke a user's access to a range |
+| `list_range_users` | List users assigned to a range |
+| `list_accessible_ranges` | List all ranges the current user can access |
+| `get_default_range` | Get the current user's default range |
+| `set_default_range` | Set the current user's default range |
+
+## Updated Tools in v2
+
+The following existing tool categories have been enhanced when running against a v2 server.
+
+### User Management Updates
+
+- The `add_user` tool now accepts an optional `email` parameter.
+- New support for OAuth2 provisioning for SSO-backed user creation.
+- Users can query their group memberships via updated user info responses.
+
+### Template Updates
+
+- Roles can now be scoped to specific templates or ranges via a `role_scope` parameter.
+- Role variables (`role_vars`) can be set per-template when assigning roles.
+- Support for subscription-based roles that auto-update when the upstream source changes.
 
 ## Usage Examples
 

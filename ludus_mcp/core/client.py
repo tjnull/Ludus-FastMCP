@@ -37,17 +37,34 @@ class LudusAPIClient:
         settings = get_settings()
         self.base_url = (base_url or settings.ludus_api_url).rstrip("/")
         self.api_key = api_key or settings.ludus_api_key
+        self._jwt_token = getattr(settings, "ludus_jwt_token", "") or ""
+        self._version_setting = getattr(settings, "ludus_api_version", "auto") or "auto"
+
+        # Set API version and base path
+        if self._version_setting in ("v1", "v2"):
+            self.api_version = self._version_setting
+        else:
+            # Default to v1 until detect_version() is called
+            self.api_version = "v1"
+
+        self._base_path = "/api/v2" if self.api_version == "v2" else ""
+        self._version_detected = self._version_setting in ("v1", "v2")
 
         # Initialize rate limiter
         self.rate_limiter = get_rate_limiter(max_requests=100, window_seconds=60)
 
+        # Build auth headers - JWT takes precedence over API key
+        headers = {}
+        if self._jwt_token:
+            headers["Authorization"] = f"Bearer {self._jwt_token}"
+        elif self.api_key:
+            headers["X-API-KEY"] = self.api_key
+
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=30.0,
-            verify=settings.ludus_ssl_verify,  # Configurable via LUDUS_SSL_VERIFY env var (default: False for lab environments)
-            headers={
-                "X-API-KEY": self.api_key,  # Ludus uses X-API-KEY header, not Authorization Bearer
-            },
+            verify=settings.ludus_ssl_verify,
+            headers=headers,
             limits=httpx.Limits(
                 max_connections=100,
                 max_keepalive_connections=20
@@ -66,6 +83,54 @@ class LudusAPIClient:
         """Async context manager exit."""
         await self.close()
 
+    async def detect_version(self) -> None:
+        """Auto-detect Ludus API version.
+
+        Tries /api/v2/ first. If that succeeds, sets v2. Otherwise falls back to v1.
+        Skipped entirely if LUDUS_API_VERSION is explicitly set to v1 or v2.
+        """
+        if self._version_setting in ("v1", "v2"):
+            logger.debug(f"API version explicitly set to {self.api_version}, skipping detection")
+            return
+
+        logger.info("Auto-detecting Ludus API version...")
+
+        # Try v2 endpoint first
+        try:
+            response = await self.client.request(
+                method="GET",
+                url="/api/v2/",
+            )
+            if response.status_code == 200:
+                self.api_version = "v2"
+                self._base_path = "/api/v2"
+                self._version_detected = True
+                logger.info("Detected Ludus API v2")
+                return
+        except Exception as e:
+            logger.debug(f"v2 probe failed: {e}")
+
+        # Fall back to v1
+        try:
+            response = await self.client.request(
+                method="GET",
+                url="/",
+            )
+            if response.status_code == 200:
+                self.api_version = "v1"
+                self._base_path = ""
+                self._version_detected = True
+                logger.info("Detected Ludus API v1")
+                return
+        except Exception as e:
+            logger.debug(f"v1 probe failed: {e}")
+
+        # Default to v1 if both fail
+        logger.warning("Could not detect API version, defaulting to v1")
+        self.api_version = "v1"
+        self._base_path = ""
+        self._version_detected = True
+
     @async_retry(
         max_attempts=3,
         backoff_factor=2.0,
@@ -79,6 +144,10 @@ class LudusAPIClient:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any] | list[Any]:
         """Make an HTTP request to the Ludus API with retry logic and error handling."""
+        # Lazy version detection on first API call
+        if not self._version_detected:
+            await self.detect_version()
+
         # Generate request ID for tracing
         request_id = str(uuid.uuid4())[:8]
 
@@ -102,7 +171,7 @@ class LudusAPIClient:
 
             response = await self.client.request(
                 method=method,
-                url=endpoint,
+                url=f"{self._base_path}{endpoint}",
                 json=json_data,
                 params=params,
                 headers=headers,
@@ -244,7 +313,13 @@ class LudusAPIClient:
         if target_user_id:
             params["userID"] = target_user_id
             logger.info(f"[SAFETY] Using explicit userID parameter: {target_user_id}")
-        
+
+        if self.api_version == "v2":
+            range_info = await self.get_range(user_id=target_user_id)
+            range_id = range_info.get("rangeID", range_info.get("range_id", ""))
+            if not range_id:
+                raise ValueError("Could not determine rangeID for VM deletion")
+            return await self._request("DELETE", f"/range/{range_id}/vms", params=params)
         return await self._request("DELETE", "/range", params=params)
 
     async def get_range_config(self, user_id: str | None = None) -> dict[str, Any]:
@@ -298,7 +373,7 @@ class LudusAPIClient:
         try:
             response = await self.client.request(
                 method="PUT",
-                url="/range/config",
+                url=f"{self._base_path}/range/config",
                 params=params,
                 files=files,
             )
@@ -467,6 +542,8 @@ class LudusAPIClient:
 
     async def get_range_access(self, user_id: str | None = None) -> dict[str, Any]:
         """Get range access configuration."""
+        if self.api_version == "v2":
+            return await self._request("GET", "/ranges/accessible")
         params = {}
         if user_id:
             params["userID"] = user_id
@@ -476,24 +553,44 @@ class LudusAPIClient:
         self, access_config: dict[str, Any], user_id: str | None = None
     ) -> dict[str, Any]:
         """Update range access configuration."""
+        if self.api_version == "v2":
+            target_user = access_config.get("userID", user_id)
+            range_id = access_config.get("rangeID", "")
+            if target_user and range_id:
+                return await self._request("POST", f"/ranges/assign/{target_user}/{range_id}")
+            raise ValueError("v2 requires userID and rangeID for range access assignment")
         params = {}
         if user_id:
             params["userID"] = user_id
         return await self._request("POST", "/range/access", json_data=access_config, params=params)
 
     # Power State Management
-    async def power_on_range(self, user_id: str | None = None) -> dict[str, Any]:
-        """Power on all VMs in the range."""
+    async def power_on_range(self, user_id: str | None = None, vms: str = "all") -> dict[str, Any]:
+        """Power on VMs in the range.
+
+        Args:
+            user_id: Optional user ID (admin only)
+            vms: VM names (comma-separated) or 'all' (default). Required for v2.
+        """
         params = {}
         if user_id:
             params["userID"] = user_id
+        if self.api_version == "v2":
+            params["vms"] = vms
         return await self._request("PUT", "/range/poweron", params=params)
 
-    async def power_off_range(self, user_id: str | None = None) -> dict[str, Any]:
-        """Power off all VMs in the range."""
+    async def power_off_range(self, user_id: str | None = None, vms: str = "all") -> dict[str, Any]:
+        """Power off VMs in the range.
+
+        Args:
+            user_id: Optional user ID (admin only)
+            vms: VM names (comma-separated) or 'all' (default). Required for v2.
+        """
         params = {}
         if user_id:
             params["userID"] = user_id
+        if self.api_version == "v2":
+            params["vms"] = vms
         return await self._request("PUT", "/range/poweroff", params=params)
 
     # Testing State Management
@@ -728,7 +825,10 @@ class LudusAPIClient:
             "parallel": parallel
         }
         if template_name:
-            payload["template_name"] = template_name
+            if self.api_version == "v2":
+                payload["templates"] = [template_name]
+            else:
+                payload["template_name"] = template_name
 
         params = {}
         if user_id:
@@ -844,15 +944,17 @@ class LudusAPIClient:
         is_admin: bool = False,
         proxmox_username: str | None = None,
         proxmox_password: str | None = None,
+        email: str | None = None,
     ) -> dict[str, Any]:
         """Add a new user (admin only).
-        
+
         Args:
             user_id: User ID (1-20 character alphanumeric)
             name: User's full name
             is_admin: Whether user is an admin
             proxmox_username: Optional Proxmox username
             proxmox_password: Optional Proxmox password
+            email: Optional email address (v2 only)
         """
         payload: dict[str, Any] = {
             "userID": user_id,
@@ -863,19 +965,24 @@ class LudusAPIClient:
             payload["proxmoxUsername"] = proxmox_username
         if proxmox_password:
             payload["proxmoxPassword"] = proxmox_password
+        if email and self.api_version == "v2":
+            payload["email"] = email
 
         return await self._request("POST", "/user", json_data=payload)
 
-    async def remove_user(self, user_id: str, require_confirmation: bool = True) -> dict[str, Any]:
+    async def remove_user(
+        self, user_id: str, require_confirmation: bool = True, delete_default_range: bool = False
+    ) -> dict[str, Any]:
         """Remove a user (admin only).
-        
+
         **CRITICAL SAFETY**: This function permanently deletes a user and all their data.
         This operation CANNOT be undone.
-        
+
         Args:
             user_id: User ID to remove
             require_confirmation: If True (default), raises ValueError if user_id is empty or looks like a wildcard.
-        
+            delete_default_range: If True (v2 only), also delete the user's default range.
+
         Raises:
             ValueError: If require_confirmation=True and user_id appears unsafe (empty, wildcard, etc.)
         """
@@ -892,17 +999,234 @@ class LudusAPIClient:
                     "This prevents accidental deletion of multiple users. "
                     "You must specify an exact user_id."
                 )
-        
+
         logger.critical(
             f"[DESTRUCTIVE OPERATION] Removing user: {user_id}. "
             f"This will permanently delete the user, their API keys, ranges, and all associated data. "
             f"This operation CANNOT be undone."
         )
-        
-        return await self._request("DELETE", f"/user/{user_id}")
+
+        params = {}
+        if self.api_version == "v2" and delete_default_range:
+            params["deleteDefaultRange"] = "true"
+        return await self._request("DELETE", f"/user/{user_id}", params=params)
+
+    # Blueprint Management (v2 only)
+    async def list_blueprints(self) -> list[dict[str, Any]]:
+        """List all blueprints."""
+        result = await self._request("GET", "/blueprints")
+        return result if isinstance(result, list) else []
+
+    async def create_blueprint_from_range(self, range_id: str, blueprint_id: str | None = None) -> dict[str, Any]:
+        """Create a blueprint from an existing range.
+
+        Args:
+            range_id: ID of the range to create blueprint from
+            blueprint_id: ID for the new blueprint. If not provided, uses range_id.
+        """
+        payload: dict[str, Any] = {"rangeID": range_id, "blueprintID": blueprint_id or range_id}
+        return await self._request("POST", "/blueprints/from-range", json_data=payload)
+
+    async def apply_blueprint(self, blueprint_id: str, range_id: str) -> dict[str, Any]:
+        """Apply a blueprint to a range."""
+        return await self._request("POST", f"/blueprints/{blueprint_id}/apply", json_data={"rangeID": range_id})
+
+    async def copy_blueprint(self, blueprint_id: str) -> dict[str, Any]:
+        """Copy a blueprint."""
+        return await self._request("POST", f"/blueprints/{blueprint_id}/copy")
+
+    async def delete_blueprint(self, blueprint_id: str) -> dict[str, Any]:
+        """Delete a blueprint."""
+        return await self._request("DELETE", f"/blueprints/{blueprint_id}")
+
+    async def get_blueprint_config(self, blueprint_id: str) -> dict[str, Any]:
+        """Get blueprint configuration."""
+        return await self._request("GET", f"/blueprints/{blueprint_id}/config")
+
+    async def update_blueprint_config(self, blueprint_id: str, config: dict[str, Any]) -> dict[str, Any]:
+        """Update blueprint configuration."""
+        return await self._request("PUT", f"/blueprints/{blueprint_id}/config", json_data=config)
+
+    async def share_blueprint_with_users(self, blueprint_id: str, user_ids: list[str]) -> dict[str, Any]:
+        """Share a blueprint with users."""
+        return await self._request("POST", f"/blueprints/{blueprint_id}/share/users", json_data={"userIDs": user_ids})
+
+    async def unshare_blueprint_with_users(self, blueprint_id: str, user_ids: list[str]) -> dict[str, Any]:
+        """Unshare a blueprint from users."""
+        return await self._request("DELETE", f"/blueprints/{blueprint_id}/share/users", json_data={"userIDs": user_ids})
+
+    async def share_blueprint_with_groups(self, blueprint_id: str, group_names: list[str]) -> dict[str, Any]:
+        """Share a blueprint with groups."""
+        return await self._request("POST", f"/blueprints/{blueprint_id}/share/groups", json_data={"groupNames": group_names})
+
+    async def unshare_blueprint_with_groups(self, blueprint_id: str, group_names: list[str]) -> dict[str, Any]:
+        """Unshare a blueprint from groups."""
+        return await self._request("DELETE", f"/blueprints/{blueprint_id}/share/groups", json_data={"groupNames": group_names})
+
+    async def list_blueprint_access_users(self, blueprint_id: str) -> list[dict[str, Any]]:
+        """List users with access to a blueprint."""
+        result = await self._request("GET", f"/blueprints/{blueprint_id}/access/users")
+        return result if isinstance(result, list) else []
+
+    async def list_blueprint_access_groups(self, blueprint_id: str) -> list[dict[str, Any]]:
+        """List groups with access to a blueprint."""
+        result = await self._request("GET", f"/blueprints/{blueprint_id}/access/groups")
+        return result if isinstance(result, list) else []
+
+    # Group Management (v2 only)
+    async def list_groups(self) -> list[dict[str, Any]]:
+        """List all groups."""
+        result = await self._request("GET", "/groups")
+        return result if isinstance(result, list) else []
+
+    async def create_group(self, name: str) -> dict[str, Any]:
+        """Create a new group."""
+        return await self._request("POST", "/groups", json_data={"name": name})
+
+    async def delete_group(self, group_name: str) -> dict[str, Any]:
+        """Delete a group."""
+        return await self._request("DELETE", f"/groups/{group_name}")
+
+    async def add_users_to_group(self, group_name: str, user_ids: list[str]) -> dict[str, Any]:
+        """Add users to a group."""
+        return await self._request("POST", f"/groups/{group_name}/users", json_data={"userIDs": user_ids})
+
+    async def remove_users_from_group(self, group_name: str, user_ids: list[str]) -> dict[str, Any]:
+        """Remove users from a group."""
+        return await self._request("DELETE", f"/groups/{group_name}/users", json_data={"userIDs": user_ids})
+
+    async def list_group_members(self, group_name: str) -> list[dict[str, Any]]:
+        """List group members."""
+        result = await self._request("GET", f"/groups/{group_name}/users")
+        return result if isinstance(result, list) else []
+
+    async def add_ranges_to_group(self, group_name: str, range_ids: list[str]) -> dict[str, Any]:
+        """Add ranges to a group."""
+        return await self._request("POST", f"/groups/{group_name}/ranges", json_data={"rangeIDs": range_ids})
+
+    async def remove_ranges_from_group(self, group_name: str, range_ids: list[str]) -> dict[str, Any]:
+        """Remove ranges from a group."""
+        return await self._request("DELETE", f"/groups/{group_name}/ranges", json_data={"rangeIDs": range_ids})
+
+    async def list_group_ranges(self, group_name: str) -> list[dict[str, Any]]:
+        """List group ranges."""
+        result = await self._request("GET", f"/groups/{group_name}/ranges")
+        return result if isinstance(result, list) else []
+
+    # VM Management (v2 only)
+    async def destroy_vm(self, vm_id: str) -> dict[str, Any]:
+        """Destroy a specific VM."""
+        return await self._request("DELETE", f"/vm/{vm_id}")
+
+    async def get_console_ticket(self, vm_id: str) -> dict[str, Any]:
+        """Get console WebSocket ticket for a VM."""
+        return await self._request("GET", "/vm/console/ticket", params={"vmID": vm_id})
+
+    # Diagnostics (v2 only)
+    async def get_diagnostics(self) -> dict[str, Any]:
+        """Get system diagnostics."""
+        return await self._request("GET", "/diagnostics")
+
+    async def whoami(self) -> dict[str, Any]:
+        """Test authentication and get user info."""
+        return await self._request("GET", "/whoami")
+
+    async def get_license(self) -> dict[str, Any]:
+        """Get license information."""
+        return await self._request("GET", "/license")
+
+    # Migration (v2 only)
+    async def migrate_sqlite_to_pocketbase(self) -> dict[str, Any]:
+        """Migrate from SQLite to PocketBase."""
+        return await self._request("POST", "/migrate/sqlite")
+
+    async def get_sdn_migration_status(self) -> dict[str, Any]:
+        """Get SDN migration status."""
+        return await self._request("GET", "/migrate/sdn/status")
+
+    async def migrate_to_sdn(self) -> dict[str, Any]:
+        """Migrate to SDN networking."""
+        return await self._request("POST", "/migrate/sdn")
+
+    async def setup_sdn(self) -> dict[str, Any]:
+        """Setup SDN infrastructure."""
+        return await self._request("POST", "/sdn/setup")
+
+    # Enhanced Range Management (v2 only)
+    async def create_range(self, name: str, range_id: str | None = None, description: str | None = None) -> dict[str, Any]:
+        """Create a new range.
+
+        Args:
+            name: Display name for the range
+            range_id: Range ID (alphanumeric identifier). If not provided, derived from name.
+            description: Optional range description
+        """
+        payload: dict[str, Any] = {"name": name}
+        if range_id:
+            payload["rangeID"] = range_id
+        if description:
+            payload["description"] = description
+        return await self._request("POST", "/ranges/create", json_data=payload)
+
+    async def assign_range_to_user(self, user_id: str, range_id: str) -> dict[str, Any]:
+        """Assign range access to a user."""
+        return await self._request("POST", f"/ranges/assign/{user_id}/{range_id}")
+
+    async def revoke_range_from_user(self, user_id: str, range_id: str) -> dict[str, Any]:
+        """Revoke range access from a user."""
+        return await self._request("DELETE", f"/ranges/revoke/{user_id}/{range_id}")
+
+    async def list_range_users(self, range_id: str) -> list[dict[str, Any]]:
+        """List users with access to a range."""
+        result = await self._request("GET", f"/ranges/{range_id}/users")
+        return result if isinstance(result, list) else []
+
+    async def list_accessible_ranges(self) -> list[dict[str, Any]]:
+        """List ranges accessible to current user."""
+        result = await self._request("GET", "/ranges/accessible")
+        return result if isinstance(result, list) else []
+
+    async def get_default_range(self) -> dict[str, Any]:
+        """Get user's default range ID."""
+        return await self._request("GET", "/user/default-range")
+
+    async def set_default_range(self, range_id: str) -> dict[str, Any]:
+        """Set user's default range."""
+        return await self._request("POST", "/user/default-range", json_data={"rangeID": range_id})
+
+    async def get_user_memberships(self) -> list[dict[str, Any]]:
+        """Get current user's group memberships."""
+        result = await self._request("GET", "/user/memberships")
+        return result if isinstance(result, list) else []
+
+    # Enhanced Ansible (v2 only)
+    async def move_role_scope(self, role_name: str, scope: str) -> dict[str, Any]:
+        """Move an Ansible role's scope."""
+        return await self._request("PATCH", "/ansible/role/scope", json_data={"name": role_name, "scope": scope})
+
+    async def get_role_vars(self, role_name: str) -> dict[str, Any]:
+        """Get Ansible role variables."""
+        return await self._request("POST", "/ansible/role/vars", json_data={"name": role_name})
+
+    async def list_subscription_roles(self) -> list[dict[str, Any]]:
+        """List subscription roles (enterprise)."""
+        result = await self._request("GET", "/ansible/subscription-roles")
+        return result if isinstance(result, list) else []
+
+    async def install_subscription_roles(self, roles: list[str]) -> dict[str, Any]:
+        """Install subscription roles (enterprise)."""
+        return await self._request("POST", "/ansible/subscription-roles", json_data={"roles": roles})
+
+    # Enhanced User (v2 only)
+    async def provision_oauth2_user(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Provision an OAuth2 user."""
+        return await self._request("POST", "/user/provision-oauth2", json_data=config)
 
     async def reset_user_proxmox_password(self, user_id: str) -> dict[str, Any]:
         """Reset a user's Proxmox password (admin only)."""
+        if self.api_version == "v2":
+            payload = {"userID": user_id}
+            return await self._request("POST", "/user/credentials", json_data=payload)
         payload = {"userID": user_id}
         return await self._request("POST", "/user/passwordreset", json_data=payload)
 

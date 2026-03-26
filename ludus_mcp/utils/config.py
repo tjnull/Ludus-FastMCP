@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     ludus_api_url: str = "http://localhost:8080"
     ludus_api_key: str = ""
     ludus_ssl_verify: bool = False  # Default False for self-signed certs in lab environments
+    ludus_api_version: str = "auto"  # "auto", "v1", or "v2"
+    ludus_jwt_token: str = ""  # JWT Bearer token for Pro/SSO users
 
     # LLM Configuration (supports multiple providers)
     llm_provider_type: str = "llama-cpp"  # llama-cpp, gpt4all, openai, anthropic, google, ollama
@@ -74,7 +76,7 @@ class Settings(BaseSettings):
 
     # MCP Server Configuration
     mcp_server_name: str = "ludus-fastmcp"
-    mcp_server_version: str = "1.0.0"
+    mcp_server_version: str = "2.0.0"
 
     # Logging
     log_level: str = "INFO"

@@ -44,9 +44,9 @@ def get_client() -> LudusAPIClient:
             raise RuntimeError(
                 "LUDUS_API_URL is not set. Please configure it in your .env file or environment."
             )
-        if not settings.ludus_api_key:
+        if not settings.ludus_api_key and not getattr(settings, "ludus_jwt_token", ""):
             raise RuntimeError(
-                "LUDUS_API_KEY is not set. Please configure it in your .env file or environment."
+                "LUDUS_API_KEY or LUDUS_JWT_TOKEN is not set. Please configure it in your .env file or environment."
             )
 
         _client = LudusAPIClient()
@@ -63,16 +63,20 @@ def get_client() -> LudusAPIClient:
 def _print_startup_banner(settings):
     """Print enhanced startup banner with logging."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    api_version = getattr(settings, 'ludus_api_version', 'auto')
+    auth_type = 'JWT' if getattr(settings, 'ludus_jwt_token', '') else 'API Key'
 
     print("\n" + "╔" + "═" * 78 + "╗", file=sys.stderr)
     print("║" + " " * 78 + "║", file=sys.stderr)
     print("║" + "  Ludus MCP Server (FastMCP)".center(78) + "║", file=sys.stderr)
-    print("║" + f"  Version 1.0 - {timestamp}".center(78) + "║", file=sys.stderr)
+    print("║" + f"  Version 2.0 - {timestamp}".center(78) + "║", file=sys.stderr)
     print("║" + " " * 78 + "║", file=sys.stderr)
     print("╚" + "═" * 78 + "╝", file=sys.stderr)
     print(file=sys.stderr)
     print("[INFO] Server Configuration:", file=sys.stderr)
     print(f"  • API URL:     {settings.ludus_api_url}", file=sys.stderr)
+    print(f"  • API Version: {api_version}", file=sys.stderr)
+    print(f"  • Auth Type:   {auth_type}", file=sys.stderr)
     print(f"  • API Key:     {'*' * 20}...{settings.ludus_api_key[-8:] if settings.ludus_api_key else 'Not set'}", file=sys.stderr)
     print(f"  • Log Level:   {'VERBOSE' if _verbose_mode else 'QUIET'}", file=sys.stderr)
     print(f"  • Mode:        {'DAEMON' if _daemon_mode else 'FOREGROUND'}", file=sys.stderr)
@@ -110,6 +114,11 @@ def _initialize_mcp_server() -> FastMCP:
         from ludus_mcp.server.tools.ai_generation import create_ai_config_tools
         from ludus_mcp.server.tools.profile_transformation import create_profile_transformation_tools
         from ludus_mcp.server.tools.role_management import create_role_management_tools
+        from ludus_mcp.server.tools.blueprints import create_blueprint_tools
+        from ludus_mcp.server.tools.groups import create_group_tools
+        from ludus_mcp.server.tools.vm import create_vm_tools
+        from ludus_mcp.server.tools.diagnostics import create_diagnostics_tools
+        from ludus_mcp.server.tools.range_access import create_range_access_tools
 
         # Import all tool servers into main server
         tool_modules = [
@@ -128,6 +137,11 @@ def _initialize_mcp_server() -> FastMCP:
             ("AI Configuration Generation", create_ai_config_tools),
             ("Adversary/Defender Profiles", create_profile_transformation_tools),
             ("Role Management", create_role_management_tools),
+            ("Blueprints", create_blueprint_tools),
+            ("Groups", create_group_tools),
+            ("VM Management", create_vm_tools),
+            ("Diagnostics & Migration", create_diagnostics_tools),
+            ("Enhanced Range Management", create_range_access_tools),
         ]
 
         if _verbose_mode:
@@ -191,7 +205,7 @@ def print_help():
     help_text = """
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                        Ludus FastMCP Server                                  ║
-║                              Version 1.0                                     ║
+║                              Version 2.0                                     ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 USAGE:
@@ -201,7 +215,7 @@ OPTIONS:
     --help, -h              Show this help message
     --list-tools, -l        List all 157 available FastMCP tools
     --list-tools-detailed   List tools with descriptions
-    --version, -v           Show version information (v1.0)
+    --version, -v           Show version information (v2.0)
     --setup                 Run interactive setup wizard (configure API, LLM, etc.)
     --setup-guide           Show manual setup instructions
     --verbose, -V           Enable verbose logging (shows module loading, etc.)
@@ -213,7 +227,7 @@ DESCRIPTION:
     Ludus FastMCP Server provides Model Context Protocol (MCP) integration for
     Ludus, enabling AI assistants to manage cybersecurity lab environments.
 
-    Version 1.0 includes 157 tools across 15 modules with skeleton templates,
+    Version 2.0 includes 157 tools across 15 modules with skeleton templates,
     Ansible Galaxy role management, and enhanced AI-assisted range building.
 
 SETUP:
@@ -351,11 +365,11 @@ def print_version():
     """Print version information."""
     print("""
 Ludus FastMCP Server
-Version: 1.0
+Version: 2.0
 FastMCP: 2.2.0+
 Python: 3.11+
 
-Features (v1.0):
+Features (v2.0):
   - 157 FastMCP tools across 15 modules
   - Skeleton Templates (8 tools) - Pre-built VM and range configurations
   - Role Management (11 tools) - Ansible Galaxy & custom role installation

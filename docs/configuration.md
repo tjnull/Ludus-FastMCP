@@ -15,6 +15,8 @@ Complete configuration reference for Ludus FastMCP, including environment variab
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `LUDUS_API_VERSION` | `auto` | API version selection: `auto` (default), `v1`, or `v2`. Auto-detects the server version on first API call. |
+| `LUDUS_JWT_TOKEN` | — | JWT Bearer token for Pro/SSO users. When set, takes precedence over `LUDUS_API_KEY`. |
 | `LUDUS_SSL_VERIFY` | `false` | Enable SSL certificate verification |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
 
@@ -281,6 +283,60 @@ ludus-ai install opencode
 ```bash
 ludus-ai clear-cache --all
 ludus-ai clear-cache --opencode
+```
+
+## Ludus 2.0 Support
+
+Ludus FastMCP supports both Ludus v1 and v2 servers. This section covers what changes with v2 and how to configure the server accordingly.
+
+### Auto-Detection
+
+By default (`LUDUS_API_VERSION=auto`), the server automatically detects whether it is connected to a v1 or v2 Ludus instance on the first API call. No manual configuration is needed in most cases.
+
+### Overriding the API Version
+
+If you want to skip auto-detection and target a specific version, set the environment variable explicitly:
+
+```bash
+export LUDUS_API_VERSION=v2
+```
+
+This can be useful in CI/CD pipelines or when connecting to a known v2 server to avoid the initial detection round-trip.
+
+### Backwards Compatibility
+
+All existing tools continue to work on v1 servers without any changes. Upgrading Ludus FastMCP does not break existing v1 workflows.
+
+### v2-Only Tools
+
+Ludus 2.0 introduces new tool categories (Blueprints, Groups, VM Management, Diagnostics & Migration, and enhanced Range Management). These tools are always visible regardless of the detected server version, but calling them against a v1 server will return a clear error message indicating that the tool requires Ludus v2.
+
+See the [Tools Reference](tools-reference.md) for the full list of v2-only tools.
+
+### JWT Authentication (Pro / SSO)
+
+For Ludus Pro users authenticating via SSO, set `LUDUS_JWT_TOKEN` instead of `LUDUS_API_KEY`:
+
+```bash
+export LUDUS_JWT_TOKEN="eyJhbGciOiJSUzI1NiIs..."
+```
+
+When `LUDUS_JWT_TOKEN` is set it takes precedence over `LUDUS_API_KEY`. The token is sent as a standard `Authorization: Bearer <token>` header.
+
+Example MCP client configuration with JWT:
+
+```json
+{
+  "mcpServers": {
+    "ludus": {
+      "command": "ludus-fastmcp",
+      "env": {
+        "LUDUS_API_URL": "https://your-ludus-instance:8080",
+        "LUDUS_JWT_TOKEN": "eyJhbGciOiJSUzI1NiIs..."
+      }
+    }
+  }
+}
 ```
 
 ## Related Documentation
