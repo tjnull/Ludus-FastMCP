@@ -295,10 +295,28 @@ For more information, run: ludus-fastmcp --list-tools
     print(help_text)
 
 
+async def _get_tool_names(mcp: FastMCP) -> list[str]:
+    """Return the sorted names of all registered tools.
+
+    FastMCP 2.x exposes get_tools() -> dict[str, Tool]; 3.x removed it in favor
+    of list_tools() -> Sequence[Tool], which may return the same name more than
+    once (one entry per version), so names are de-duplicated here.
+    """
+    get_tools = getattr(mcp, "get_tools", None)
+    if get_tools is not None:
+        tools = await get_tools()
+    else:
+        tools = await mcp.list_tools()
+
+    if isinstance(tools, dict):
+        return sorted(tools)
+    return sorted({getattr(tool, "name", str(tool)) for tool in tools})
+
+
 async def list_tools_async(detailed: bool = False):
     """List all available tools."""
     mcp = _initialize_mcp_server()
-    tools = await mcp.get_tools()
+    tools = await _get_tool_names(mcp)
 
     print("\n" + "=" * 80)
     print(f"Ludus MCP Tools - {len(tools)} tools available")
@@ -683,6 +701,11 @@ def cli_main():
             print("Run 'ludus-fastmcp --help' for usage information")
             sys.exit(1)
 
+    # Re-apply logging now that --verbose/--daemon have been parsed. The
+    # import-time setup_logging(quiet=True) call runs before argv is read, so
+    # without this --verbose would print the banner but still drop INFO logs.
+    setup_logging(quiet=not _verbose_mode)
+
     # Normal server startup
     try:
         # Initialize MCP server (this validates API credentials)
@@ -690,8 +713,7 @@ def cli_main():
 
         if _verbose_mode:
             # Count total tools
-            total_tools = asyncio.run(mcp.get_tools())
-            tool_count = len(total_tools)
+            tool_count = len(asyncio.run(_get_tool_names(mcp)))
 
             print("[INFO] Starting MCP Server:", file=sys.stderr)
             print(f"  - Total Tools: {tool_count}", file=sys.stderr)

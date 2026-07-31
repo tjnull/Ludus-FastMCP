@@ -576,23 +576,30 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
 
                 latency_ms = round((time.time() - start_time) * 1000, 2)
 
-                if result.returncode == 0:
-                    output = (result.stdout + result.stderr).strip()
-                    # Parse versions from output
-                    # Example: "[INFO]  Ludus client 1.11.5+b9fe95c"
-                    #          "[INFO]  Ludus Server 1.11.4+b1da5c6 - community license"
-                    server_version = None
-                    client_version = None
-                    license_type = None
-                    for line in output.split('\n'):
-                        if 'Ludus Server' in line:
-                            parts = line.split('Ludus Server')[-1].strip()
-                            server_version = parts.split()[0] if parts else None
-                            if ' - ' in parts:
-                                license_type = parts.split(' - ')[-1].strip()
-                        elif 'Ludus client' in line:
-                            client_version = line.split('Ludus client')[-1].strip()
+                output = (result.stdout + result.stderr).strip()
+                # Parse versions from output
+                # Example: "[INFO]  Ludus client 1.11.5+b9fe95c"
+                #          "[INFO]  Ludus Server 1.11.4+b1da5c6 - community license"
+                server_version = None
+                client_version = None
+                license_type = None
+                error_lines = []
+                for line in output.split('\n'):
+                    if 'Ludus Server' in line:
+                        parts = line.split('Ludus Server')[-1].strip()
+                        server_version = parts.split()[0] if parts else None
+                        if ' - ' in parts:
+                            license_type = parts.split(' - ')[-1].strip()
+                    elif 'Ludus client' in line:
+                        client_version = line.split('Ludus client')[-1].strip()
+                    elif '[ERROR]' in line:
+                        error_lines.append(line.split('[ERROR]', 1)[-1].strip())
 
+                # `ludus version` still prints the client version and exits 0
+                # when it cannot reach the server - it just emits [ERROR] lines
+                # and omits "Ludus Server ...". A parsed server version is the
+                # reliable signal that the API was actually reached.
+                if result.returncode == 0 and server_version:
                     health_info.update({
                         "status": "healthy",
                         "ludus_api": {
@@ -606,13 +613,14 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
                         },
                     })
                 else:
-                    error_msg = result.stderr.strip() or result.stdout.strip()
+                    error_msg = "; ".join(error_lines) or result.stderr.strip() or result.stdout.strip()
                     health_info.update({
                         "status": "unhealthy",
-                        "error": error_msg[:200],
+                        "error": error_msg[:200] or "Could not determine Ludus server version",
                         "ludus_api": {
                             "reachable": False,
                             "base_url": settings.ludus_api_url,
+                            "client_version": client_version,
                             "method": "ludus_cli",
                         },
                     })

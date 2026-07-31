@@ -25,11 +25,16 @@ class UserFriendlyFormatter(logging.Formatter):
 
 
 def setup_logging(quiet: bool = False) -> None:
-    """Configure application logging with user-friendly output."""
+    """Configure application logging with user-friendly output.
+
+    Args:
+        quiet: Suppress everything below WARNING. Callers decide this
+            explicitly (the server is quiet by default and only turns logging
+            up for --verbose/--daemon), so no stdio-detection guesswork here.
+    """
     settings = get_settings()
-    
-    # In quiet mode or when running as MCP server, suppress most logs
-    if quiet or _is_mcp_server_mode():
+
+    if quiet:
         log_level = logging.WARNING
     else:
         log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
@@ -47,13 +52,6 @@ def setup_logging(quiet: bool = False) -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-
-
-def _is_mcp_server_mode() -> bool:
-    """Check if running as MCP server (stdio mode)."""
-    # MCP servers communicate via stdio, so if stdin is a TTY, we're not in MCP mode
-    import sys
-    return not sys.stdin.isatty()
 
 
 def get_logger(name: str) -> logging.Logger:
