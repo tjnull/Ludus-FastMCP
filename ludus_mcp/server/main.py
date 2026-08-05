@@ -10,6 +10,7 @@ from datetime import datetime
 from fastmcp import FastMCP
 from ludus_mcp.core.client import LudusAPIClient
 from ludus_mcp.server.tools.core import create_core_tools
+from ludus_mcp.server.mcp_logging_middleware import RequestResponseLoggingMiddleware
 from ludus_mcp.utils.config import get_settings
 from ludus_mcp.utils.logging import setup_logging, get_logger
 
@@ -63,7 +64,6 @@ def get_client() -> LudusAPIClient:
 def _print_startup_banner(settings):
     """Print enhanced startup banner with logging."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    api_version = getattr(settings, 'ludus_api_version', 'auto')
     auth_type = 'JWT' if getattr(settings, 'ludus_jwt_token', '') else 'API Key'
 
     print("\n" + "╔" + "═" * 78 + "╗", file=sys.stderr)
@@ -75,7 +75,7 @@ def _print_startup_banner(settings):
     print(file=sys.stderr)
     print("[INFO] Server Configuration:", file=sys.stderr)
     print(f"  • API URL:     {settings.ludus_api_url}", file=sys.stderr)
-    print(f"  • API Version: {api_version}", file=sys.stderr)
+    print(f"  • API:         Ludus 2.x (/api/v2)", file=sys.stderr)
     print(f"  • Auth Type:   {auth_type}", file=sys.stderr)
     print(f"  • API Key:     {'*' * 20}...{settings.ludus_api_key[-8:] if settings.ludus_api_key else 'Not set'}", file=sys.stderr)
     print(f"  • Log Level:   {'VERBOSE' if _verbose_mode else 'QUIET'}", file=sys.stderr)
@@ -96,6 +96,13 @@ def _initialize_mcp_server() -> FastMCP:
     # Create main FastMCP server and register tools
     client = get_client()
     mcp = create_core_tools(client)
+
+    # Record every request/response payload when LOG_LEVEL=DEBUG. Driven by
+    # config rather than a CLI flag so it works when an MCP client spawns the
+    # server, which is exactly when there is no terminal to watch.
+    if get_settings().log_level.upper() == "DEBUG":
+        mcp.add_middleware(RequestResponseLoggingMiddleware())
+        logger.debug("Request/response logging middleware enabled (LOG_LEVEL=DEBUG)")
 
     # Import all tool modules
     try:
@@ -119,6 +126,8 @@ def _initialize_mcp_server() -> FastMCP:
         from ludus_mcp.server.tools.vm import create_vm_tools
         from ludus_mcp.server.tools.diagnostics import create_diagnostics_tools
         from ludus_mcp.server.tools.range_access import create_range_access_tools
+        from ludus_mcp.server.tools.sources import create_source_tools
+        from ludus_mcp.server.tools.quotas import create_quota_tools
 
         # Import all tool servers into main server
         tool_modules = [
@@ -142,6 +151,8 @@ def _initialize_mcp_server() -> FastMCP:
             ("VM Management", create_vm_tools),
             ("Diagnostics & Migration", create_diagnostics_tools),
             ("Enhanced Range Management", create_range_access_tools),
+            ("Content Sources", create_source_tools),
+            ("Quotas & Limits", create_quota_tools),
         ]
 
         if _verbose_mode:
@@ -213,13 +224,15 @@ USAGE:
 
 OPTIONS:
     --help, -h              Show this help message
-    --list-tools, -l        List all 157 available FastMCP tools
+    --list-tools, -l        List all 231 available FastMCP tools
     --list-tools-detailed   List tools with descriptions
     --version, -v           Show version information (v2.0)
     --setup                 Run interactive setup wizard (configure API, LLM, etc.)
     --setup-guide           Show manual setup instructions
     --verbose, -V           Enable verbose logging (shows module loading, etc.)
-    --daemon, -d            Run in daemon/background mode
+    --daemon, -d            Run in the background, serving MCP over HTTP
+                            (default http://127.0.0.1:8765/mcp; set
+                            MCP_DAEMON_HOST / MCP_DAEMON_PORT to change)
     --stop-daemon           Stop the daemon process
     --status                Check daemon status and view logs
 
@@ -227,7 +240,7 @@ DESCRIPTION:
     Ludus FastMCP Server provides Model Context Protocol (MCP) integration for
     Ludus, enabling AI assistants to manage cybersecurity lab environments.
 
-    Version 2.0 includes 157 tools across 15 modules with skeleton templates,
+    Version 2.0 includes 231 tools across 23 modules with skeleton templates,
     Ansible Galaxy role management, and enhanced AI-assisted range building.
 
 SETUP:
@@ -269,7 +282,7 @@ MCP CLIENT CONFIGURATION:
       }
     }
 
-AVAILABLE TOOL CATEGORIES (157 tools total):
+AVAILABLE TOOL CATEGORIES (231 tools total):
     • Core Operations (16 tools)        - Ranges, snapshots, power, templates
     • Deployment (12 tools)             - Scenarios, orchestration, monitoring
     • Users (5 tools)                   - User management
@@ -296,21 +309,12 @@ For more information, run: ludus-fastmcp --list-tools
 
 
 async def _get_tool_names(mcp: FastMCP) -> list[str]:
-    """Return the sorted names of all registered tools.
+    """Return the sorted, unique names of all registered tools.
 
-    FastMCP 2.x exposes get_tools() -> dict[str, Tool]; 3.x removed it in favor
-    of list_tools() -> Sequence[Tool], which may return the same name more than
-    once (one entry per version), so names are de-duplicated here.
+    list_tools() returns one entry per tool version, so the same name can appear
+    more than once; de-duplicate before counting or printing.
     """
-    get_tools = getattr(mcp, "get_tools", None)
-    if get_tools is not None:
-        tools = await get_tools()
-    else:
-        tools = await mcp.list_tools()
-
-    if isinstance(tools, dict):
-        return sorted(tools)
-    return sorted({getattr(tool, "name", str(tool)) for tool in tools})
+    return sorted({tool.name for tool in await mcp.list_tools()})
 
 
 async def list_tools_async(detailed: bool = False):
@@ -384,18 +388,18 @@ def print_version():
     print("""
 Ludus FastMCP Server
 Version: 2.0
-FastMCP: 2.2.0+
+FastMCP: 3.0.0+
 Python: 3.11+
 
 Features (v2.0):
-  - 157 FastMCP tools across 15 modules
+  - Tool count and module list: run 'ludus-fastmcp --list-tools'
   - Skeleton Templates (8 tools) - Pre-built VM and range configurations
   - Role Management (11 tools) - Ansible Galaxy & custom role installation
   - Custom Template Builder (18 tools) - Create custom OS/container templates
   - Range Management (6 tools) - Selective range deletion with safety
   - AI Config Generation - Natural language to YAML configs
   - Enhanced Logging - Verbose mode with module loading progress
-  - Daemon Mode - Background operation with status monitoring
+  - Daemon Mode - Background operation over HTTP with status monitoring
   - FastMCP-based architecture
   - Async/await support
 
@@ -508,6 +512,44 @@ def _get_log_file():
     return Path.home() / ".ludus-fastmcp" / "ludus-fastmcp.log"
 
 
+def _read_pid_file(pid_file) -> int | None:
+    """Read the daemon PID, or None if the file is missing or malformed."""
+    try:
+        return int(pid_file.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_is_running(pid: int) -> bool:
+    """Check whether a PID exists."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Exists, just owned by another user
+        return True
+    return True
+
+
+def _pid_is_our_daemon(pid: int) -> bool | None:
+    """Best-effort check that a PID really is a ludus-fastmcp process.
+
+    PIDs get reused, so a stale PID file can point at an unrelated process -
+    signalling it would kill something the user never started.
+
+    Returns:
+        True/False, or None when it cannot be determined (no /proc, no access).
+    """
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (OSError, ValueError):
+        return None
+
+    text = cmdline.replace(b"\0", b" ").decode("utf-8", errors="replace")
+    return "ludus-fastmcp" in text or "ludus_mcp" in text
+
+
 def _start_daemon():
     """Start the MCP server in daemon mode."""
     pid_file = _get_pid_file()
@@ -518,25 +560,28 @@ def _start_daemon():
 
     # Check if already running
     if pid_file.exists():
-        try:
-            pid = int(pid_file.read_text().strip())
-            # Check if process is running
-            os.kill(pid, 0)
-            print(f"[ERROR] Daemon already running with PID {pid}")
+        existing_pid = _read_pid_file(pid_file)
+        if (
+            existing_pid is not None
+            and _pid_is_running(existing_pid)
+            and _pid_is_our_daemon(existing_pid) is not False
+        ):
+            print(f"[ERROR] Daemon already running with PID {existing_pid}")
             print(f"   Use 'ludus-fastmcp --stop-daemon' to stop it first")
             sys.exit(1)
-        except (OSError, ValueError):
-            # Process not running, remove stale PID file
-            pid_file.unlink()
+        # Not running, or the PID now belongs to something else: stale file
+        pid_file.unlink(missing_ok=True)
 
     # Fork process
     try:
         pid = os.fork()
         if pid > 0:
-            # Parent process
-            print(f"[OK] Daemon started with PID {pid}")
+            # Parent process. Deliberately no PID here: this child forks again
+            # and exits, so the daemon's real PID is the grandchild's, written
+            # to the PID file by the daemon itself.
+            print("[OK] Daemon starting in background")
             print(f"   Log file: {log_file}")
-            print(f"   Use 'ludus-fastmcp --status' to check status")
+            print(f"   Use 'ludus-fastmcp --status' to check status and PID")
             print(f"   Use 'ludus-fastmcp --stop-daemon' to stop")
             sys.exit(0)
     except OSError as e:
@@ -582,9 +627,25 @@ def _stop_daemon():
         print("[ERROR] Daemon is not running (no PID file found)")
         sys.exit(1)
 
-    try:
-        pid = int(pid_file.read_text().strip())
+    pid = _read_pid_file(pid_file)
+    if pid is None:
+        print("[WARNING] PID file is unreadable; removing it")
+        pid_file.unlink(missing_ok=True)
+        sys.exit(1)
 
+    if not _pid_is_running(pid):
+        print(f"[OK] Daemon is not running (removed stale PID file for {pid})")
+        pid_file.unlink(missing_ok=True)
+        return
+
+    if _pid_is_our_daemon(pid) is False:
+        # The daemon died and the OS handed its PID to something else.
+        print(f"[ERROR] PID {pid} is not a ludus-fastmcp process - refusing to signal it")
+        print("   Removed the stale PID file; the daemon was already gone")
+        pid_file.unlink(missing_ok=True)
+        sys.exit(1)
+
+    try:
         # Try to kill the process
         os.kill(pid, signal.SIGTERM)
 
@@ -606,12 +667,12 @@ def _stop_daemon():
             pass
 
         # Remove PID file
-        pid_file.unlink()
+        pid_file.unlink(missing_ok=True)
         print(f"[OK] Daemon stopped (PID {pid})")
 
     except (OSError, ValueError) as e:
         print(f"[ERROR] Error stopping daemon: {e}")
-        pid_file.unlink()  # Remove stale PID file
+        pid_file.unlink(missing_ok=True)  # Remove stale PID file
         sys.exit(1)
 
 
@@ -625,10 +686,14 @@ def _check_daemon_status():
         return
 
     try:
-        pid = int(pid_file.read_text().strip())
+        pid = _read_pid_file(pid_file)
 
-        # Check if process is running
-        os.kill(pid, 0)
+        # A recorded PID that is gone - or that now belongs to an unrelated
+        # process after PID reuse - means the daemon is not running.
+        if pid is None or not _pid_is_running(pid) or _pid_is_our_daemon(pid) is False:
+            print("⭕ Daemon Status: NOT RUNNING (stale PID file)")
+            print(f"   PID File: {pid_file}")
+            return
 
         print("[OK] Daemon Status: RUNNING")
         print(f"   PID:      {pid}")
@@ -704,12 +769,28 @@ def cli_main():
     # Re-apply logging now that --verbose/--daemon have been parsed. The
     # import-time setup_logging(quiet=True) call runs before argv is read, so
     # without this --verbose would print the banner but still drop INFO logs.
-    setup_logging(quiet=not _verbose_mode)
+    # log_to_file is off in daemon mode: _start_daemon() already redirects this
+    # process's stderr into the same file with os.dup2(), so a file handler
+    # would write every line twice.
+    setup_logging(quiet=not _verbose_mode, log_to_file=not _daemon_mode)
 
     # Normal server startup
     try:
         # Initialize MCP server (this validates API credentials)
         mcp = _initialize_mcp_server()
+
+        # A daemonised stdio server is pointless: stdin is /dev/null, so the
+        # transport reads EOF and the process exits within a second. Daemon
+        # mode therefore serves MCP over HTTP instead.
+        settings = get_settings()
+        if _daemon_mode:
+            transport = "http"
+            host = settings.mcp_daemon_host
+            port = settings.mcp_daemon_port
+            endpoint = f"http://{host}:{port}/mcp"
+        else:
+            transport = "stdio"
+            endpoint = None
 
         if _verbose_mode:
             # Count total tools
@@ -717,8 +798,10 @@ def cli_main():
 
             print("[INFO] Starting MCP Server:", file=sys.stderr)
             print(f"  - Total Tools: {tool_count}", file=sys.stderr)
-            print(f"  - Transport:   STDIO", file=sys.stderr)
+            print(f"  - Transport:   {transport.upper()}", file=sys.stderr)
             print(f"  - Mode:        {'DAEMON' if _daemon_mode else 'FOREGROUND'}", file=sys.stderr)
+            if endpoint:
+                print(f"  - Endpoint:    {endpoint}", file=sys.stderr)
             print(file=sys.stderr)
             print("="* 60, file=sys.stderr)
             print("[OK] MCP Server Ready - Waiting for client connection...", file=sys.stderr)
@@ -726,7 +809,10 @@ def cli_main():
             print(file=sys.stderr)
 
         # Run the FastMCP server
-        mcp.run()
+        if _daemon_mode:
+            mcp.run(transport="http", host=host, port=port)
+        else:
+            mcp.run()
 
     except KeyboardInterrupt:
         if _verbose_mode:

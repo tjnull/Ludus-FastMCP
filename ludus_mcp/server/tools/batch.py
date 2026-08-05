@@ -10,7 +10,6 @@ from fastmcp import FastMCP
 from ludus_mcp.core.client import LudusAPIClient
 from ludus_mcp.server.handlers.snapshots import SnapshotHandler
 from ludus_mcp.server.handlers.power import PowerHandler
-from ludus_mcp.server.handlers.hosts import HostHandler
 from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_response
 
 

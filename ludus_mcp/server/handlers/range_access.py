@@ -20,7 +20,7 @@ class RangeAccessHandler:
     ) -> dict[str, Any]:
         """Create a new range."""
         logger.debug(f"Creating range: {name}")
-        return await self.client.create_range(name, description)
+        return await self.client.create_range(name=name, description=description)
 
     async def assign_range_to_user(
         self, user_id: str, range_id: str

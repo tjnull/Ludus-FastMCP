@@ -37,7 +37,7 @@ def create_range_access_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Created range information
         """
-        guard = require_v2(client, "Enhanced Range Management")
+        guard = await require_v2(client, "Enhanced Range Management")
         if guard:
             return guard
         handler = registry.get_handler("range_access", RangeAccessHandler)
@@ -55,7 +55,7 @@ def create_range_access_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Assignment result
         """
-        guard = require_v2(client, "Enhanced Range Management")
+        guard = await require_v2(client, "Enhanced Range Management")
         if guard:
             return guard
         handler = registry.get_handler("range_access", RangeAccessHandler)
@@ -73,7 +73,7 @@ def create_range_access_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Revocation result
         """
-        guard = require_v2(client, "Enhanced Range Management")
+        guard = await require_v2(client, "Enhanced Range Management")
         if guard:
             return guard
         handler = registry.get_handler("range_access", RangeAccessHandler)
@@ -90,7 +90,7 @@ def create_range_access_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             List of users with access to the range
         """
-        guard = require_v2(client, "Enhanced Range Management")
+        guard = await require_v2(client, "Enhanced Range Management")
         if guard:
             return guard
         handler = registry.get_handler("range_access", RangeAccessHandler)
@@ -104,7 +104,7 @@ def create_range_access_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             List of ranges the current user has access to
         """
-        guard = require_v2(client, "Enhanced Range Management")
+        guard = await require_v2(client, "Enhanced Range Management")
         if guard:
             return guard
         handler = registry.get_handler("range_access", RangeAccessHandler)
@@ -118,7 +118,7 @@ def create_range_access_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Default range information
         """
-        guard = require_v2(client, "Enhanced Range Management")
+        guard = await require_v2(client, "Enhanced Range Management")
         if guard:
             return guard
         handler = registry.get_handler("range_access", RangeAccessHandler)
@@ -135,7 +135,7 @@ def create_range_access_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Result of setting default range
         """
-        guard = require_v2(client, "Enhanced Range Management")
+        guard = await require_v2(client, "Enhanced Range Management")
         if guard:
             return guard
         handler = registry.get_handler("range_access", RangeAccessHandler)

@@ -51,7 +51,7 @@ pip install -e .
 
 ```bash
 ludus-fastmcp --version
-ludus-fastmcp --list-tools  # Should display 157 tools
+ludus-fastmcp --list-tools  # Should display 231 tools
 ```
 
 ## Configuration
@@ -275,7 +275,7 @@ Create a snapshot of all VMs named clean-state
 ```bash
 ludus-fastmcp --setup           # Interactive setup wizard
 ludus-fastmcp --setup-guide     # Manual setup instructions
-ludus-fastmcp --list-tools      # List all 157 tools
+ludus-fastmcp --list-tools      # List all 231 tools
 ludus-fastmcp --version         # Version information
 ludus-fastmcp --verbose         # Start with verbose logging
 ludus-fastmcp --daemon          # Run as background service
@@ -297,6 +297,6 @@ ludus-ai tool call-tool <name>  # Execute tool directly
 ## Next Steps
 
 - [Configuration Guide](configuration.md) - Advanced configuration options
-- [Tools Reference](tools-reference.md) - Complete tool documentation (157 tools)
+- [Tools Reference](tools-reference.md) - Complete tool documentation (231 tools)
 - [Scenarios Guide](scenarios.md) - Available deployment scenarios
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions

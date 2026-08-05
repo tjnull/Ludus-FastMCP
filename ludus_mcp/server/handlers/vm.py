@@ -20,7 +20,9 @@ class VMHandler:
         logger.debug(f"Destroying VM: {vm_id}")
         return await self.client.destroy_vm(vm_id)
 
-    async def get_console_ticket(self, vm_id: str) -> dict[str, Any]:
+    async def get_console_ticket(
+        self, vm_id: str, user_id: str | None = None
+    ) -> dict[str, Any]:
         """Get console WebSocket ticket for a VM."""
         logger.debug(f"Getting console ticket for VM: {vm_id}")
-        return await self.client.get_console_ticket(vm_id)
+        return await self.client.get_console_ticket(vm_id, user_id)

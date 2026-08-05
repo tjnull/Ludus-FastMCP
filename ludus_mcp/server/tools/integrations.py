@@ -23,27 +23,25 @@ def create_integration_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def webhook_integration(
-        action: str,
-        webhook_url: str | None = None,
-        events: list[str] | None = None,
-        webhook_id: str | None = None,
+        webhook_url: str,
+        events: list[str],
+        secret: str | None = None,
         user_id: str | None = None
     ) -> dict:
-        """Manage webhook integrations.
+        """Configure a webhook for range events.
 
         Args:
-            action: Action to perform (create, update, delete, list, test)
-            webhook_url: Webhook URL (for create/update)
-            events: List of events to trigger webhook (for create/update)
-            webhook_id: Webhook ID (for update/delete/test)
+            webhook_url: URL to POST events to
+            events: List of events that should trigger the webhook
+            secret: Optional shared secret used to sign deliveries
             user_id: Optional user ID (admin only)
 
         Returns:
-            Webhook operation result
+            Webhook configuration result
         """
         handler = registry.get_handler("integration", IntegrationsHandler)
         result = await handler.webhook_integration(
-            action, webhook_url, events, webhook_id, user_id
+            webhook_url=webhook_url, events=events, secret=secret, user_id=user_id
         )
         return format_tool_response(result)
 
@@ -51,19 +49,17 @@ def create_integration_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def slack_notifications(
-        action: str,
-        webhook_url: str | None = None,
-        channel: str | None = None,
-        events: list[str] | None = None,
+        webhook_url: str,
+        channel: str,
+        notification_types: list[str],
         user_id: str | None = None
     ) -> dict:
-        """Configure Slack notifications.
+        """Configure Slack notifications for deployment status.
 
         Args:
-            action: Action to perform (enable, disable, test, configure)
-            webhook_url: Slack webhook URL
-            channel: Slack channel name
-            events: List of events to notify on
+            webhook_url: Slack incoming webhook URL
+            channel: Slack channel to post to
+            notification_types: Event types to notify on
             user_id: Optional user ID (admin only)
 
         Returns:
@@ -71,7 +67,8 @@ def create_integration_tools(client: LudusAPIClient) -> FastMCP:
         """
         handler = registry.get_handler("integration", IntegrationsHandler)
         result = await handler.slack_notifications(
-            action, webhook_url, channel, events, user_id
+            webhook_url=webhook_url, channel=channel,
+            notification_types=notification_types, user_id=user_id
         )
         return format_tool_response(result)
 
@@ -79,21 +76,19 @@ def create_integration_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def jira_integration(
-        action: str,
-        jira_url: str | None = None,
-        project_key: str | None = None,
-        api_token: str | None = None,
-        issue_id: str | None = None,
+        jira_url: str,
+        project_key: str,
+        api_token: str,
+        issue_types: dict[str, str] | None = None,
         user_id: str | None = None
     ) -> dict:
-        """Integrate with Jira for issue tracking.
+        """Configure JIRA issue creation for failed deployments.
 
         Args:
-            action: Action to perform (configure, create_issue, update_issue, link_deployment)
             jira_url: Jira instance URL
             project_key: Jira project key
             api_token: Jira API token
-            issue_id: Jira issue ID (for update/link operations)
+            issue_types: Optional mapping of event type to Jira issue type
             user_id: Optional user ID (admin only)
 
         Returns:
@@ -101,7 +96,8 @@ def create_integration_tools(client: LudusAPIClient) -> FastMCP:
         """
         handler = registry.get_handler("integration", IntegrationsHandler)
         result = await handler.jira_integration(
-            action, jira_url, project_key, api_token, issue_id, user_id
+            jira_url=jira_url, project_key=project_key, api_token=api_token,
+            issue_types=issue_types, user_id=user_id
         )
         return format_tool_response(result)
 
@@ -109,21 +105,17 @@ def create_integration_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def git_sync(
-        action: str,
-        repo_url: str | None = None,
+        repo_url: str,
         branch: str = "main",
-        sync_direction: str = "pull",
-        credentials: dict[str, str] | None = None,
+        auto_commit: bool = True,
         user_id: str | None = None
     ) -> dict:
-        """Sync range configurations with Git repository.
+        """Sync range configurations with a Git repository.
 
         Args:
-            action: Action to perform (configure, sync, status)
             repo_url: Git repository URL
             branch: Git branch to sync with
-            sync_direction: Sync direction (pull, push, bidirectional)
-            credentials: Git credentials (username, password/token)
+            auto_commit: Commit configuration changes automatically
             user_id: Optional user ID (admin only)
 
         Returns:
@@ -131,7 +123,7 @@ def create_integration_tools(client: LudusAPIClient) -> FastMCP:
         """
         handler = registry.get_handler("integration", IntegrationsHandler)
         result = await handler.git_sync(
-            action, repo_url, branch, sync_direction, credentials, user_id
+            repo_url=repo_url, branch=branch, auto_commit=auto_commit, user_id=user_id
         )
         return format_tool_response(result)
 

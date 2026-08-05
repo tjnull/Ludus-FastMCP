@@ -7,6 +7,7 @@ from ludus_mcp.server.handlers.siem import SIEMHandler
 from ludus_mcp.server.handlers.wazuh import WazuhHandler
 from ludus_mcp.server.handlers.access import AccessHandler
 from ludus_mcp.server.handlers.security_compliance import SecurityComplianceHandler
+from ludus_mcp.server.handlers.collaboration import CollaborationHandler
 from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_response
 
 
@@ -35,31 +36,35 @@ def create_security_tools(client: LudusAPIClient) -> FastMCP:
             SIEM configuration and status
         """
         handler = registry.get_handler("siem", SIEMHandler)
-        result = await handler.get_siem_info(user_id)
+        result = await handler.get_siem_server_info(user_id=user_id)
         return format_tool_response(result)
 
     @mcp.tool()
     async def get_siem_alerts(
-        user_id: str | None = None,
+        siem_type: str = "wazuh",
+        limit: int = 100,
         severity: str | None = None,
-        limit: int = 100
-    ) -> list[dict]:
+        user_id: str | None = None
+    ) -> dict:
         """Get SIEM alerts for the range.
 
         Args:
-            user_id: Optional user ID (admin only)
-            severity: Filter by severity level (low, medium, high, critical)
+            siem_type: SIEM platform to query (wazuh, splunk, elastic, security-onion)
             limit: Maximum number of alerts to return
+            severity: Filter by severity level (low, medium, high, critical)
+            user_id: Optional user ID (admin only)
 
         Returns:
-            List of SIEM alerts
+            SIEM alerts
         """
         handler = registry.get_handler("siem", SIEMHandler)
-        result = await handler.get_siem_alerts(user_id, severity, limit)
+        result = await handler.get_siem_alerts(
+            siem_type=siem_type, limit=limit, severity=severity, user_id=user_id
+        )
         return format_tool_response(result)
 
     @mcp.tool()
-    async def get_siem_agents(user_id: str | None = None) -> list[dict]:
+    async def get_siem_agents(user_id: str | None = None) -> dict:
         """Get SIEM agents for the range.
 
         Args:
@@ -69,21 +74,25 @@ def create_security_tools(client: LudusAPIClient) -> FastMCP:
             List of SIEM agents
         """
         handler = registry.get_handler("siem", SIEMHandler)
-        result = await handler.get_siem_agents(user_id)
+        result = await handler.get_siem_agents_status(user_id=user_id)
         return format_tool_response(result)
 
     @mcp.tool()
-    async def get_detection_summary(user_id: str | None = None) -> dict:
+    async def get_detection_summary(
+        siem_type: str = "wazuh",
+        user_id: str | None = None
+    ) -> dict:
         """Get detection summary from SIEM.
 
         Args:
+            siem_type: SIEM platform to query (wazuh, splunk, elastic, security-onion)
             user_id: Optional user ID (admin only)
 
         Returns:
             Detection summary with statistics
         """
         handler = registry.get_handler("siem", SIEMHandler)
-        result = await handler.get_detection_summary(user_id)
+        result = await handler.get_detection_summary(siem_type=siem_type, user_id=user_id)
         return format_tool_response(result)
 
     # ==================== WAZUH TOOLS ====================
@@ -99,20 +108,23 @@ def create_security_tools(client: LudusAPIClient) -> FastMCP:
             Wazuh configuration and status
         """
         handler = registry.get_handler("wazuh", WazuhHandler)
-        result = await handler.get_wazuh_info(user_id)
+        result = await handler.get_wazuh_server_info(user_id=user_id)
         return format_tool_response(result)
 
     # ==================== ACCESS CONTROL TOOLS ====================
 
     @mcp.tool()
-    async def get_range_access(user_id: str | None = None) -> dict:
-        """Get range access configuration.
+    async def get_range_access(user_id: str | None = None) -> list | dict:
+        """Get range access information.
+
+        Returns the LIST of ranges the caller can access, which may be empty.
+        To see who can access a specific range, use list_range_users instead.
 
         Args:
             user_id: Optional user ID (admin only)
 
         Returns:
-            Range access configuration
+            Ranges the caller can access
         """
         handler = registry.get_handler("access", AccessHandler)
         result = await handler.get_range_access(user_id)
@@ -120,22 +132,22 @@ def create_security_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def grant_range_access(
-        target_user_id: str,
-        permissions: list[str],
+        users: list[str],
         user_id: str | None = None
     ) -> dict:
-        """Grant access to range for another user.
+        """Grant other users access to your range.
+
+        Ludus grants range access per user; there are no per-permission levels.
 
         Args:
-            target_user_id: User ID to grant access to
-            permissions: List of permissions to grant (read, write, admin)
-            user_id: Optional user ID (admin only)
+            users: List of user IDs to grant access to
+            user_id: Range owner user ID (admin only)
 
         Returns:
-            Grant result
+            Updated access configuration
         """
         handler = registry.get_handler("access", AccessHandler)
-        result = await handler.grant_range_access(target_user_id, permissions, user_id)
+        result = await handler.grant_range_access(users=users, user_id=user_id)
         return format_tool_response(result)
 
     @mcp.tool()
@@ -172,20 +184,20 @@ def create_security_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def range_access_logs(
-        user_id: str | None = None,
-        limit: int = 100
-    ) -> list[dict]:
+        days: int = 7,
+        user_id: str | None = None
+    ) -> dict:
         """Get range access logs.
 
         Args:
+            days: Number of days of history to look back
             user_id: Optional user ID (admin only)
-            limit: Maximum number of log entries to return
 
         Returns:
             List of access log entries
         """
-        handler = registry.get_handler("access", AccessHandler)
-        result = await handler.range_access_logs(user_id, limit)
+        handler = registry.get_handler("collaboration", CollaborationHandler)
+        result = await handler.range_access_logs(days=days, user_id=user_id)
         return format_tool_response(result)
 
     # ==================== SECURITY COMPLIANCE TOOLS ====================
@@ -223,17 +235,26 @@ def create_security_tools(client: LudusAPIClient) -> FastMCP:
         return format_tool_response(result)
 
     @mcp.tool()
-    async def rotate_credentials(user_id: str | None = None) -> dict:
-        """Rotate credentials for the range.
+    async def rotate_credentials(
+        vm_names: list[str] | None = None,
+        user_id: str | None = None
+    ) -> dict:
+        """Suggest new credentials for VMs in the range. DOES NOT APPLY THEM.
+
+        Ludus exposes no API for setting VM user passwords, so this only
+        generates strong candidates and explains how to apply them with
+        Ansible. Nothing on any machine is changed. Do not report to a user
+        that credentials have been rotated based on this tool's output.
 
         Args:
+            vm_names: VMs to generate credentials for (omit for every VM)
             user_id: Optional user ID (admin only)
 
         Returns:
-            Credential rotation result
+            Suggested credentials plus guidance for applying them
         """
         handler = registry.get_handler("security_compliance", SecurityComplianceHandler)
-        result = await handler.rotate_credentials(user_id)
+        result = await handler.rotate_credentials(vm_names=vm_names, user_id=user_id)
         return format_tool_response(result)
 
     @mcp.tool()

@@ -1,15 +1,19 @@
 """Ludus REST API client wrapper using httpx."""
 
+import asyncio
 import httpx
+from urllib.parse import quote
 import uuid
 import time
 import yaml
 import io
+import tarfile
+import zipfile
+from pathlib import Path
 from typing import Any
 import logging
 
 from ludus_mcp.utils.config import get_settings
-from ludus_mcp.utils.retry import async_retry
 from ludus_mcp.utils.rate_limit import get_rate_limiter
 from ludus_mcp.exceptions import (
     LudusAPIError,
@@ -40,15 +44,22 @@ class LudusAPIClient:
         self._jwt_token = getattr(settings, "ludus_jwt_token", "") or ""
         self._version_setting = getattr(settings, "ludus_api_version", "auto") or "auto"
 
-        # Set API version and base path
-        if self._version_setting in ("v1", "v2"):
-            self.api_version = self._version_setting
-        else:
-            # Default to v1 until detect_version() is called
-            self.api_version = "v1"
+        if self._version_setting == "v1":
+            raise ValueError(
+                "LUDUS_API_VERSION=v1 is no longer supported. This release targets "
+                "the Ludus 2.x API only. Upgrade your Ludus server to 2.0 or later, "
+                "or pin ludus-fastmcp to a 1.x release for a v1 server."
+            )
 
-        self._base_path = "/api/v2" if self.api_version == "v2" else ""
-        self._version_detected = self._version_setting in ("v1", "v2")
+        # Every endpoint lives under /api/v2; there is no other shape to choose.
+        self.api_version = "v2"
+        self._base_path = "/api/v2"
+
+        # Populated by verify_server() on the first request: the real Ludus
+        # version string, e.g. "2.3.0+02a3ffc8". Setting LUDUS_API_VERSION=v2
+        # asserts the server is v2 and skips the verification round-trip.
+        self.server_version: str | None = None
+        self._server_verified = self._version_setting == "v2"
 
         # Initialize rate limiter
         self.rate_limiter = get_rate_limiter(max_requests=100, window_seconds=60)
@@ -60,9 +71,10 @@ class LudusAPIClient:
         elif self.api_key:
             headers["X-API-KEY"] = self.api_key
 
+        self.timeout = float(getattr(settings, "ludus_api_timeout", 120.0))
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
-            timeout=30.0,
+            timeout=self.timeout,
             verify=settings.ludus_ssl_verify,
             headers=headers,
             limits=httpx.Limits(
@@ -83,71 +95,141 @@ class LudusAPIClient:
         """Async context manager exit."""
         await self.close()
 
-    async def detect_version(self) -> None:
-        """Auto-detect Ludus API version.
+    async def verify_server(self) -> str:
+        """Confirm the server speaks the Ludus 2.x API and record its version.
 
-        Tries /api/v2/ first. If that succeeds, sets v2. Otherwise falls back to v1.
-        Skipped entirely if LUDUS_API_VERSION is explicitly set to v1 or v2.
+        GET /api/v2/ returns the server version string on a v2 server. Anything
+        else means this client cannot drive it, so fail with an actionable
+        message rather than letting every subsequent call 404 in a way that
+        looks like a client bug.
+
+        Returns:
+            The server version string, e.g. "2.3.0+02a3ffc8".
         """
-        if self._version_setting in ("v1", "v2"):
-            logger.debug(f"API version explicitly set to {self.api_version}, skipping detection")
-            return
-
-        logger.info("Auto-detecting Ludus API version...")
-
-        # Try v2 endpoint first
         try:
-            response = await self.client.request(
-                method="GET",
-                url="/api/v2/",
-            )
-            if response.status_code == 200:
-                self.api_version = "v2"
-                self._base_path = "/api/v2"
-                self._version_detected = True
-                logger.info("Detected Ludus API v2")
-                return
-        except Exception as e:
-            logger.debug(f"v2 probe failed: {e}")
+            response = await self.client.request(method="GET", url="/api/v2/")
+        except httpx.ConnectError as e:
+            raise LudusConnectionError(
+                f"Cannot connect to Ludus server at {self.base_url}. "
+                "Check LUDUS_API_URL and network connectivity."
+            ) from e
+        except httpx.TimeoutException as e:
+            raise LudusTimeoutError(
+                f"Timed out contacting {self.base_url} while checking the server version."
+            ) from e
 
-        # Fall back to v1
+        if response.status_code == 401:
+            raise LudusAuthenticationError(
+                "Authentication failed while checking the server version. "
+                "Please check your LUDUS_API_KEY."
+            )
+
+        if response.status_code != 200:
+            raise LudusAPIError(
+                status_code=response.status_code,
+                message=(
+                    f"{self.base_url} does not serve the Ludus 2.x API "
+                    f"(GET /api/v2/ returned HTTP {response.status_code}). "
+                    "This release requires Ludus 2.0 or later; upgrade the server, "
+                    "or pin ludus-fastmcp to a 1.x release for a Ludus 1.x server."
+                ),
+                details={"endpoint": "/api/v2/", "method": "GET"},
+            )
+
+        version = ""
         try:
-            response = await self.client.request(
-                method="GET",
-                url="/",
-            )
-            if response.status_code == 200:
-                self.api_version = "v1"
-                self._base_path = ""
-                self._version_detected = True
-                logger.info("Detected Ludus API v1")
-                return
-        except Exception as e:
-            logger.debug(f"v1 probe failed: {e}")
+            body = response.json()
+            if isinstance(body, dict):
+                version = str(body.get("version") or "")
+        except ValueError:
+            pass
 
-        # Default to v1 if both fail
-        logger.warning("Could not detect API version, defaulting to v1")
-        self.api_version = "v1"
-        self._base_path = ""
-        self._version_detected = True
+        self.server_version = version or "unknown"
+        self._server_verified = True
+        logger.info(f"Connected to Ludus server {self.server_version}")
+        return self.server_version
 
-    @async_retry(
-        max_attempts=3,
-        backoff_factor=2.0,
-        exceptions=(httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)
-    )
+    async def ensure_server_verified(self) -> str:
+        """Verify the server once, on the first call that needs it.
+
+        Verification is lazy so constructing a client never performs I/O.
+        """
+        if not self._server_verified:
+            await self.verify_server()
+        return self.server_version or "unknown"
+
+    # A connection error means the request never reached the server, so replaying
+    # it is safe for any method. A timeout means it may already have been acted
+    # on, so only methods without side effects are replayed - retrying a timed-out
+    # POST /range/deploy would risk deploying twice.
+    _RETRY_MAX_ATTEMPTS = 3
+    _RETRY_INITIAL_DELAY = 1.0
+    _RETRY_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+    @staticmethod
+    def _path(value: Any) -> str:
+        """Percent-encode a value for use as a single URL path segment.
+
+        Source-installed IDs contain slashes ("ludus-source-bsl/goad"), which
+        interpolated raw turn one path segment into two and 404. Group and
+        template names can likewise contain characters that need escaping.
+        """
+        return quote(str(value), safe="")
+
     async def _request(
         self,
         method: str,
         endpoint: str,
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        raw: bool = False,
     ) -> dict[str, Any] | list[Any]:
-        """Make an HTTP request to the Ludus API with retry logic and error handling."""
-        # Lazy version detection on first API call
-        if not self._version_detected:
-            await self.detect_version()
+        """Make an HTTP request to the Ludus API with retry logic and error handling.
 
+        Args:
+            files/data: multipart form-data parts, for endpoints that upload archives.
+            raw: return the undecoded body instead of parsing JSON, for endpoints that
+                serve gzip/YAML/HTML rather than JSON.
+        """
+        # Lazy version detection on first API call
+        if not self._server_verified:
+            await self.verify_server()
+
+        delay = self._RETRY_INITIAL_DELAY
+
+        for attempt in range(1, self._RETRY_MAX_ATTEMPTS + 1):
+            try:
+                return await self._send_request(
+                    method, endpoint, json_data, params, files, data, raw
+                )
+            except (LudusConnectionError, LudusTimeoutError) as e:
+                retryable = isinstance(e, LudusConnectionError) or (
+                    method.upper() in self._RETRY_SAFE_METHODS
+                )
+                if not retryable or attempt == self._RETRY_MAX_ATTEMPTS:
+                    raise
+
+                logger.warning(
+                    f"{method} {endpoint} failed with {type(e).__name__} "
+                    f"(attempt {attempt}/{self._RETRY_MAX_ATTEMPTS}). "
+                    f"Retrying in {delay:.1f}s..."
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
+
+    async def _send_request(
+        self,
+        method: str,
+        endpoint: str,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        raw: bool = False,
+    ) -> dict[str, Any] | list[Any]:
+        """Perform a single HTTP request attempt, mapping errors to Ludus exceptions."""
         # Generate request ID for tracing
         request_id = str(uuid.uuid4())[:8]
 
@@ -175,6 +257,8 @@ class LudusAPIClient:
                 json=json_data,
                 params=params,
                 headers=headers,
+                files=files,
+                data=data,
             )
 
             duration = time.time() - start_time
@@ -190,14 +274,38 @@ class LudusAPIClient:
 
             response.raise_for_status()
 
-            if response.content:
+            if not response.content:
+                return {}
+
+            content_type = response.headers.get("content-type", "")
+
+            if raw:
+                return {
+                    "content_type": content_type,
+                    "size_bytes": len(response.content),
+                    "content": response.content,
+                }
+
+            try:
                 return response.json()
-            return {}
+            except ValueError:
+                # Some endpoints advertise JSON but serve YAML/HTML/plain text
+                # (e.g. /openapi). Hand back the body rather than exploding.
+                logger.debug(
+                    f"[{request_id}] Response was not JSON (content-type: {content_type})"
+                )
+                return {
+                    "content_type": content_type,
+                    "size_bytes": len(response.content),
+                    "text": response.text,
+                }
 
         except httpx.TimeoutException as e:
             logger.error(f"[{request_id}] [ERROR] Request timed out after {time.time() - start_time:.2f}s")
             raise LudusTimeoutError(
-                f"Request to {endpoint} timed out after 30 seconds"
+                f"Request to {endpoint} timed out after {self.timeout:g} seconds. "
+                "The server may still be processing it - check state before retrying. "
+                "Raise LUDUS_API_TIMEOUT if this operation is legitimately slow."
             ) from e
 
         except httpx.ConnectError as e:
@@ -217,29 +325,59 @@ class LudusAPIClient:
             status = e.response.status_code
             error_text = e.response.text[:200] if e.response.text else "No error details"
 
+            # Ludus reports failures as {"error": "..."}. That message distinguishes
+            # cases the status code alone cannot -- most importantly a 404 meaning
+            # "this endpoint lives in an unloaded plugin" from a 404 meaning "wrong
+            # URL". Collapsing them sends callers hunting for a bug that isn't there.
+            server_message = ""
+            try:
+                body = e.response.json()
+                if isinstance(body, dict):
+                    server_message = str(body.get("error") or body.get("message") or "")
+            except ValueError:
+                pass
+
             logger.error(f"[{request_id}] [ERROR] HTTP {status}: {error_text}")
+
+            detail = f" Server said: {server_message}" if server_message else ""
 
             if status == 401:
                 raise LudusAuthenticationError(
-                    "Authentication failed. Please check your LUDUS_API_KEY."
+                    f"Authentication failed. Please check your LUDUS_API_KEY.{detail}"
                 ) from e
             elif status == 403:
                 raise LudusPermissionError(
                     f"Permission denied for {endpoint}. "
-                    "You may not have the required admin privileges."
+                    f"You may not have the required admin privileges.{detail}"
                 ) from e
             elif status == 404:
+                if "plugin" in server_message.lower():
+                    raise LudusNotFoundError(
+                        f"{endpoint} is not available on this Ludus server: "
+                        f"{server_message}. This endpoint is provided by a plugin "
+                        "(typically an enterprise feature) that is not loaded. "
+                        "The request was correct -- the capability is absent. Do not "
+                        "retry with a different path."
+                    ) from e
                 raise LudusNotFoundError(
-                    f"Resource not found: {endpoint}"
+                    f"Resource not found: {endpoint}.{detail}"
                 ) from e
             elif status == 429:
                 retry_after = e.response.headers.get("Retry-After")
                 raise LudusRateLimitError(
                     retry_after=int(retry_after) if retry_after else None
                 ) from e
+            elif status == 501:
+                # Permanent: this build does not implement the endpoint at all.
+                # "Try again later" would send the caller into a pointless loop.
+                raise LudusNotFoundError(
+                    f"{endpoint} is not implemented by this Ludus server "
+                    f"(HTTP 501).{detail} Retrying will not help -- this build "
+                    "does not provide the feature."
+                ) from e
             elif status >= 500:
                 raise LudusServerError(
-                    f"Ludus API server error ({status}). Please try again later."
+                    f"Ludus API server error ({status}).{detail} Please try again later."
                 ) from e
             else:
                 raise LudusAPIError(
@@ -264,16 +402,21 @@ class LudusAPIClient:
         return result if isinstance(result, list) else []
 
     async def delete_range(self, user_id: str | None = None, require_explicit_user: bool = True) -> dict[str, Any]:
-        """Delete a range.
-        
-        **CRITICAL SAFETY**: This function will ONLY delete the range for the specified user_id.
-        It will NEVER affect other users' ranges or system settings.
-        
+        """Destroy every VM in a range, keeping the range object itself.
+
+        This is the equivalent of `ludus range rm`: the VMs and their snapshots
+        are gone, but the range and its configuration survive, so it can be
+        redeployed. Use delete_range_object() to remove the range entirely.
+
+        **CRITICAL SAFETY**: This function will ONLY affect the range for the
+        specified user_id. It will NEVER touch other users' ranges or system
+        settings.
+
         Args:
-            user_id: User ID whose range to delete. If None, defaults to current API key's user.
+            user_id: User ID whose range to wipe. If None, defaults to current API key's user.
             require_explicit_user: If True (default), requires user_id to be explicitly provided.
-                                  Set to False only if you're certain you want to delete the current user's range.
-        
+                                  Set to False only if you're certain you want to wipe the current user's range.
+
         Raises:
             ValueError: If require_explicit_user=True and user_id is None (safety check)
         """
@@ -314,12 +457,57 @@ class LudusAPIClient:
             params["userID"] = target_user_id
             logger.info(f"[SAFETY] Using explicit userID parameter: {target_user_id}")
 
-        if self.api_version == "v2":
-            range_info = await self.get_range(user_id=target_user_id)
-            range_id = range_info.get("rangeID", range_info.get("range_id", ""))
-            if not range_id:
-                raise ValueError("Could not determine rangeID for VM deletion")
-            return await self._request("DELETE", f"/range/{range_id}/vms", params=params)
+        range_info = await self.get_range(user_id=target_user_id)
+        range_id = range_info.get("rangeID", range_info.get("range_id", ""))
+        if not range_id:
+            raise ValueError("Could not determine rangeID for VM deletion")
+        return await self._request("DELETE", f"/range/{self._path(range_id)}/vms", params=params)
+
+    async def delete_range_object(
+        self,
+        user_id: str | None = None,
+        range_id: str | None = None,
+        force: bool = False,
+        require_explicit_user: bool = True,
+    ) -> dict[str, Any]:
+        """Delete a range from the database and Proxmox entirely.
+
+        This is `ludus range rm-range`, not `ludus range rm`: it removes the
+        range object itself, so the configuration is gone too. Use delete_range()
+        to wipe only the VMs and keep the range for redeployment.
+
+        The API refuses to delete a range that still has VMs unless force is set.
+
+        Args:
+            user_id: Owner of the range. Required unless require_explicit_user is False.
+            range_id: Range to delete. Defaults to the user's default range.
+            force: Destroy any remaining VMs as part of the deletion.
+            require_explicit_user: Safety check; see delete_range().
+
+        Raises:
+            ValueError: If require_explicit_user=True and user_id is None
+        """
+        if require_explicit_user and user_id is None:
+            raise ValueError(
+                "SAFETY CHECK FAILED: delete_range_object() requires an explicit user_id. "
+                "This removes the range object itself, not just its VMs. Pass user_id "
+                "explicitly, or set require_explicit_user=False for your own range."
+            )
+
+        logger.critical(
+            f"[DESTRUCTIVE OPERATION] Deleting the range OBJECT for user: "
+            f"{user_id or 'current user'} (range: {range_id or 'default'}). "
+            "The range and its configuration are removed, not just the VMs."
+        )
+
+        params: dict[str, Any] = {}
+        if user_id:
+            params["userID"] = user_id
+        if range_id:
+            params["rangeID"] = range_id
+        if force:
+            params["force"] = "true"
+
         return await self._request("DELETE", "/range", params=params)
 
     async def get_range_config(self, user_id: str | None = None) -> dict[str, Any]:
@@ -349,6 +537,11 @@ class LudusAPIClient:
         The Ludus API requires the configuration to be sent as a YAML file via multipart/form-data.
         This method converts the config dict to YAML and sends it as a file upload.
         """
+        # This method builds its own URL from _base_path and bypasses _request(),
+        # so the lazy detection there never runs: without this, a first-call
+        # upload goes to /range/config instead of /api/v2/range/config and 404s.
+        await self.ensure_server_verified()
+
         params = {}
         if user_id:
             params["userID"] = user_id
@@ -412,16 +605,24 @@ class LudusAPIClient:
         limit: str | None = None,
         only_roles: str | None = None,
         force: bool = False,
+        range_id: str | None = None,
     ) -> dict[str, Any]:
-        """Deploy a range from configuration.
+        """Deploy a range.
+
+        The deploy filters go in the request BODY; only rangeID and userID are
+        query parameters. Sending tags/limit/force as query parameters gets them
+        silently ignored, so a request meant to touch one VM redeploys the
+        entire range instead.
 
         Args:
-            config: Range configuration (optional if resuming with tags/limit)
+            config: Range configuration. If given it is stored first, since the
+                deploy endpoint itself deploys whatever config is already saved.
             user_id: User ID for admin impersonation
             tags: Ansible tags to run (comma-separated, e.g., "user,domain")
             limit: Limit deployment to VMs matching pattern (e.g., "DC*")
             only_roles: Limit user-defined roles (comma-separated)
             force: Force deployment if testing is enabled
+            range_id: Range to deploy. Defaults to the user's default range.
 
         Returns:
             Deployment result
@@ -439,19 +640,30 @@ class LudusAPIClient:
             # Combine filters
             deploy_range(tags="user", limit="WS*")
         """
-        params = {}
+        # /range/deploy has no config field -- it deploys the stored config. Store
+        # it first so deploy_range(config=...) behaves the way it reads.
+        if config is not None:
+            await self.update_range_config(config, user_id)
+
+        params: dict[str, Any] = {}
         if user_id:
             params["userID"] = user_id
-        if tags:
-            params["tags"] = tags
-        if limit:
-            params["limit"] = limit
-        if only_roles:
-            params["onlyRoles"] = only_roles
-        if force:
-            params["force"] = "true"
+        if range_id:
+            params["rangeID"] = range_id
 
-        return await self._request("POST", "/range/deploy", json_data=config, params=params)
+        payload: dict[str, Any] = {}
+        if tags:
+            payload["tags"] = tags
+        if limit:
+            payload["limit"] = limit
+        if only_roles:
+            payload["only_roles"] = only_roles
+        if force:
+            payload["force"] = True
+
+        return await self._request(
+            "POST", "/range/deploy", json_data=payload or None, params=params
+        )
 
     # Range Management - Additional endpoints
     async def abort_range_deployment(self, user_id: str | None = None, require_explicit_user: bool = True) -> dict[str, Any]:
@@ -501,11 +713,21 @@ class LudusAPIClient:
         """Get example range configuration."""
         return await self._request("GET", "/range/config/example")
 
-    async def get_range_logs(self, user_id: str | None = None) -> str:
-        """Get range deployment logs."""
-        params = {}
+    async def get_range_logs(
+        self, user_id: str | None = None, tail: int | None = None
+    ) -> str:
+        """Get range deployment logs.
+
+        Args:
+            user_id: Optional user ID (admin only)
+            tail: Only return the last N lines. Deployment logs run to tens of
+                thousands of lines, so callers should almost always set this.
+        """
+        params: dict[str, Any] = {}
         if user_id:
             params["userID"] = user_id
+        if tail is not None:
+            params["tail"] = tail
         result = await self._request("GET", "/range/logs", params=params)
         return result.get("result", "") if isinstance(result, dict) else str(result)
 
@@ -526,11 +748,43 @@ class LudusAPIClient:
         return result.get("result", "") if isinstance(result, dict) else str(result)
 
     async def get_range_rdpconfigs(self, user_id: str | None = None) -> dict[str, Any]:
-        """Get RDP configurations for the range."""
+        """Get RDP configurations for the range.
+
+        This endpoint answers with a ZIP archive, not JSON. Parsing it as JSON
+        failed with "'utf-8' codec can't decode byte 0x81". The archive is
+        unpacked here so callers get the .rdp files as text.
+        """
+        await self.ensure_server_verified()
+
         params = {}
         if user_id:
             params["userID"] = user_id
-        return await self._request("GET", "/range/rdpconfigs", params=params)
+
+        await self.rate_limiter.acquire()
+        response = await self.client.request(
+            method="GET", url=f"{self._base_path}/range/rdpconfigs", params=params
+        )
+        response.raise_for_status()
+
+        content_type = response.headers.get("content-type", "")
+        if "json" in content_type:
+            return response.json()
+
+        files: dict[str, str] = {}
+        try:
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                for name in archive.namelist():
+                    if name.endswith("/"):
+                        continue
+                    files[name] = archive.read(name).decode("utf-8", errors="replace")
+        except zipfile.BadZipFile:
+            return {
+                "content_type": content_type,
+                "size_bytes": len(response.content),
+                "error": "Response was not JSON or a readable ZIP archive.",
+            }
+
+        return {"count": len(files), "files": files, "content_type": content_type}
 
     async def get_range_ansible_inventory(self, user_id: str | None = None) -> str:
         """Get Ansible inventory for the range."""
@@ -542,29 +796,35 @@ class LudusAPIClient:
 
     async def get_range_access(self, user_id: str | None = None) -> dict[str, Any]:
         """Get range access configuration."""
-        if self.api_version == "v2":
-            return await self._request("GET", "/ranges/accessible")
-        params = {}
-        if user_id:
-            params["userID"] = user_id
-        return await self._request("GET", "/range/access", params=params)
+        return await self._request("GET", "/ranges/accessible")
 
     async def update_range_access(
         self, access_config: dict[str, Any], user_id: str | None = None
     ) -> dict[str, Any]:
         """Update range access configuration."""
-        if self.api_version == "v2":
-            target_user = access_config.get("userID", user_id)
-            range_id = access_config.get("rangeID", "")
-            if target_user and range_id:
-                return await self._request("POST", f"/ranges/assign/{target_user}/{range_id}")
-            raise ValueError("v2 requires userID and rangeID for range access assignment")
-        params = {}
-        if user_id:
-            params["userID"] = user_id
-        return await self._request("POST", "/range/access", json_data=access_config, params=params)
+        target_user = access_config.get("userID", user_id)
+        range_id = access_config.get("rangeID", "")
+        if not (target_user and range_id):
+            raise ValueError(
+                "Granting range access requires both userID and rangeID. "
+                "Access is assigned per (user, range) pair."
+            )
+        return await self._request(
+            "POST", f"/ranges/assign/{self._path(target_user)}/{self._path(range_id)}"
+        )
 
     # Power State Management
+    @staticmethod
+    def _machine_list(vms: str | list[str] | None) -> list[str]:
+        """Normalise a VM selector into the API's "machines" array."""
+        if vms is None:
+            return ["all"]
+        if isinstance(vms, str):
+            if vms.strip().lower() == "all":
+                return ["all"]
+            return [part.strip() for part in vms.split(",") if part.strip()] or ["all"]
+        return [str(v) for v in vms] or ["all"]
+
     async def power_on_range(self, user_id: str | None = None, vms: str = "all") -> dict[str, Any]:
         """Power on VMs in the range.
 
@@ -575,9 +835,13 @@ class LudusAPIClient:
         params = {}
         if user_id:
             params["userID"] = user_id
-        if self.api_version == "v2":
-            params["vms"] = vms
-        return await self._request("PUT", "/range/poweron", params=params)
+        # The API takes a JSON body with a "machines" ARRAY. Sending "vms" as a
+        # query parameter left the selector empty and the server answered 409
+        # "you must specify a VM, comma separated list of VMs, or 'all'".
+        machines = self._machine_list(vms)
+        return await self._request(
+            "PUT", "/range/poweron", json_data={"machines": machines}, params=params
+        )
 
     async def power_off_range(self, user_id: str | None = None, vms: str = "all") -> dict[str, Any]:
         """Power off VMs in the range.
@@ -589,9 +853,13 @@ class LudusAPIClient:
         params = {}
         if user_id:
             params["userID"] = user_id
-        if self.api_version == "v2":
-            params["vms"] = vms
-        return await self._request("PUT", "/range/poweroff", params=params)
+        # The API takes a JSON body with a "machines" ARRAY. Sending "vms" as a
+        # query parameter left the selector empty and the server answered 409
+        # "you must specify a VM, comma separated list of VMs, or 'all'".
+        machines = self._machine_list(vms)
+        return await self._request(
+            "PUT", "/range/poweroff", json_data={"machines": machines}, params=params
+        )
 
     # Testing State Management
     async def start_testing(self, user_id: str | None = None) -> dict[str, Any]:
@@ -635,66 +903,6 @@ class LudusAPIClient:
             params["userID"] = user_id
         return await self._request("POST", "/testing/update", json_data=testing_config, params=params)
 
-    # Host operations
-    async def create_host(
-        self,
-        range_id: str,
-        name: str,
-        network_id: str | None = None,
-        template: str | None = None,
-        cpu: int | None = None,
-        memory: int | None = None,
-        disk: int | None = None,
-        description: str | None = None,
-    ) -> dict[str, Any]:
-        """Create a new host in a range."""
-        payload: dict[str, Any] = {"name": name}
-        if network_id:
-            payload["network_id"] = network_id
-        if template:
-            payload["template"] = template
-        if cpu:
-            payload["cpu"] = cpu
-        if memory:
-            payload["memory"] = memory
-        if disk:
-            payload["disk"] = disk
-        if description:
-            payload["description"] = description
-
-        return await self._request(
-            "POST",
-            f"/ranges/{range_id}/hosts",
-            json_data=payload,
-        )
-
-    async def get_host(self, range_id: str, host_id: str) -> dict[str, Any]:
-        """Get a host by ID."""
-        return await self._request("GET", f"/ranges/{range_id}/hosts/{host_id}")
-
-    async def list_hosts(self, range_id: str) -> list[dict[str, Any]]:
-        """List all hosts in a range."""
-        result = await self._request("GET", f"/ranges/{range_id}/hosts")
-        return result if isinstance(result, list) else []
-
-    async def start_host(self, range_id: str, host_id: str) -> dict[str, Any]:
-        """Start a host."""
-        return await self._request(
-            "POST", f"/ranges/{range_id}/hosts/{host_id}/start"
-        )
-
-    async def stop_host(self, range_id: str, host_id: str) -> dict[str, Any]:
-        """Stop a host."""
-        return await self._request(
-            "POST", f"/ranges/{range_id}/hosts/{host_id}/stop"
-        )
-
-    async def delete_host(self, range_id: str, host_id: str) -> dict[str, Any]:
-        """Delete a host."""
-        return await self._request(
-            "DELETE", f"/ranges/{range_id}/hosts/{host_id}"
-        )
-
     # Snapshot Management (Ludus API format)
     async def list_snapshots(self, user_id: str | None = None) -> list[dict[str, Any]]:
         """List all snapshots for the range."""
@@ -702,7 +910,54 @@ class LudusAPIClient:
         if user_id:
             params["userID"] = user_id
         result = await self._request("GET", "/snapshots/list", params=params)
+        # The API wraps the list: {"snapshots": [...]}. Treating a non-list as
+        # empty silently reported "no snapshots" for every range that had them.
+        if isinstance(result, dict):
+            return result.get("snapshots") or []
         return result if isinstance(result, list) else []
+
+    async def resolve_vm_ids(
+        self, vm_names: str | list[str] | None, user_id: str | None = None
+    ) -> list[int]:
+        """Translate VM names into Proxmox VMIDs for the snapshot endpoints.
+
+        The snapshot API selects machines by "vmids", not by name; passing a
+        name field it does not understand silently applies the operation to
+        EVERY VM in the range.
+
+        Args:
+            vm_names: One name, several names, or None for the whole range
+            user_id: Optional user ID (admin only)
+
+        Returns:
+            Matching VMIDs; empty list means "all VMs in the range"
+
+        Raises:
+            ValueError: If a requested name is not in the range.
+        """
+        if not vm_names:
+            return []
+
+        names = [vm_names] if isinstance(vm_names, str) else list(vm_names)
+        range_info = await self.get_range(user_id)
+        vms = range_info.get("VMs", []) or []
+        by_name = {vm.get("name"): vm.get("proxmoxID") for vm in vms}
+
+        vmids: list[int] = []
+        missing: list[str] = []
+        for name in names:
+            vmid = by_name.get(name)
+            if vmid is None:
+                missing.append(name)
+            else:
+                vmids.append(int(vmid))
+
+        if missing:
+            raise ValueError(
+                f"VM(s) not found in range: {', '.join(missing)}. "
+                f"Available: {', '.join(n for n in by_name if n) or 'none'}"
+            )
+        return vmids
 
     async def create_snapshot(
         self,
@@ -760,7 +1015,7 @@ class LudusAPIClient:
         params = {}
         if user_id:
             params["userID"] = user_id
-        return await self._request("DELETE", f"/template/{template_name}", params=params)
+        return await self._request("DELETE", f"/template/{self._path(template_name)}", params=params)
 
     async def abort_template_operation(self, user_id: str | None = None) -> dict[str, Any]:
         """Abort template operation."""
@@ -784,57 +1039,86 @@ class LudusAPIClient:
         params = {}
         if user_id:
             params["userID"] = user_id
-        return await self._request("GET", "/templates/status", params=params)
+        result = await self._request("GET", "/templates/status", params=params)
+        # The API answers `null` when no build is running; returning None made
+        # the MCP tool fail output validation ("outputSchema defined but no
+        # structured output"). Report an explicit, empty status instead.
+        if result is None:
+            return {"building": [], "status": "idle"}
+        if isinstance(result, list):
+            return {"building": result, "status": "building" if result else "idle"}
+        return result
 
     async def add_template(
         self,
-        template_data: dict[str, Any],
-        user_id: str | None = None
+        directory: str,
+        force: bool = False,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
-        """Add a template to Ludus.
+        """Add a packer template to Ludus by uploading a local directory.
+
+        Ludus has no URL-based template add: templates are packer directories
+        uploaded as a gzipped tar. The endpoint is PUT /templates; the older
+        POST /templates/add path does not exist and returns 404.
 
         Args:
-            template_data: Template configuration including files/directory content
+            directory: Local template directory. Windows templates must contain
+                an Autounattend.xml at their root.
+            force: Replace the template directory if it already exists on Ludus.
             user_id: Optional user ID (admin only)
 
         Returns:
             API response with template add status
         """
+        path = Path(directory)
+        if not path.is_dir():
+            raise ValueError(
+                f"Template directory not found: {directory}. "
+                "add_template uploads a local packer template directory."
+            )
+
+        # The endpoint reads a plain tar; a gzipped one is rejected with
+        # "Invalid tar archive: unexpected EOF".
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as tar:
+            tar.add(str(path), arcname=path.name)
+
+        files = {"file": (f"{path.name}.tar", buffer.getvalue(), "application/x-tar")}
+        data = {"force": str(force).lower()}
+
         params = {}
         if user_id:
             params["userID"] = user_id
-        return await self._request("POST", "/templates/add", json_data=template_data, params=params)
+
+        return await self._request("PUT", "/templates", files=files, data=data, params=params)
 
     async def build_template(
         self,
-        template_name: str | None = None,
+        template_name: str | list[str] | None = None,
         parallel: int = 1,
         user_id: str | None = None
     ) -> dict[str, Any]:
-        """Build a template or all templates.
+        """Build one template, several templates, or all of them.
 
         Args:
-            template_name: Name of template to build, or None for all templates
+            template_name: Template name, list of names, or None for all templates
             parallel: Number of templates to build in parallel (default: 1)
             user_id: Optional user ID (admin only)
 
         Returns:
             API response with build status
         """
-        payload = {
-            "parallel": parallel
-        }
+        payload: dict[str, Any] = {"parallel": parallel}
+
         if template_name:
-            if self.api_version == "v2":
-                payload["templates"] = [template_name]
-            else:
-                payload["template_name"] = template_name
+            names = [template_name] if isinstance(template_name, str) else list(template_name)
+            payload["templates"] = names
 
         params = {}
         if user_id:
             params["userID"] = user_id
 
-        return await self._request("POST", "/templates/build", json_data=payload, params=params)
+        return await self._request("POST", "/templates", json_data=payload, params=params)
 
     # Host Management
     async def get_host_info(self) -> dict[str, Any]:
@@ -850,15 +1134,35 @@ class LudusAPIClient:
         self, role_config: dict[str, Any]
     ) -> dict[str, Any]:
         """Install an Ansible role.
-        
+
         Args:
             role_config: Role configuration dict with:
-                - "action": "install"
-                - "name": role name
-                - "url": optional URL for Galaxy roles
-                - "directory": optional path for local directory installation
+                - "role" (or "name"): role name, e.g. "geerlingguy.java"
+                - "action": "install" (default)
+                - "version": optional version to pin
+                - "force": optional, reinstall if already present
+                - "global": optional, install for all users (admin only)
+                - "directory": optional path on the SERVER for a local install
         """
-        return await self._request("POST", "/ansible/role", json_data=role_config)
+        payload = dict(role_config)
+
+        # The API field is "role"; callers historically passed "name", which the
+        # server read as an empty role name and answered
+        # "sorry, '' was not found on https://galaxy.ansible.com/api/".
+        if "role" not in payload:
+            name = payload.pop("name", None)
+            if name:
+                payload["role"] = name
+        else:
+            payload.pop("name", None)
+
+        if not payload.get("role") and not payload.get("directory"):
+            raise ValueError(
+                "install_ansible_role() needs a role name (or a directory to install from)."
+            )
+
+        payload.setdefault("action", "install")
+        return await self._request("POST", "/ansible/role", json_data=payload)
 
     async def install_ansible_role_from_tar(
         self, role_config: dict[str, Any]
@@ -935,7 +1239,13 @@ class LudusAPIClient:
         params = {}
         if user_id:
             params["userID"] = user_id
-        return await self._request("GET", "/user", params=params)
+        result = await self._request("GET", "/user", params=params)
+        # The API answers with a single-element list even when asked for one
+        # user; unwrap it so this matches its declared dict return type (and so
+        # the MCP tool does not fail structured-output validation).
+        if isinstance(result, list):
+            return result[0] if result else {}
+        return result
 
     async def add_user(
         self,
@@ -956,6 +1266,14 @@ class LudusAPIClient:
             proxmox_password: Optional Proxmox password
             email: Optional email address (v2 only)
         """
+        # The API rejects user creation without an email ("Email is required"),
+        # so fail here with something actionable instead of a raw 400.
+        if not email:
+            raise ValueError(
+                f"Ludus 2.0+ requires an email address to create user '{user_id}'. "
+                "Pass email=... (Ludus uses <userid>@ludus.internal by convention)."
+            )
+
         payload: dict[str, Any] = {
             "userID": user_id,
             "name": name,
@@ -965,7 +1283,7 @@ class LudusAPIClient:
             payload["proxmoxUsername"] = proxmox_username
         if proxmox_password:
             payload["proxmoxPassword"] = proxmox_password
-        if email and self.api_version == "v2":
+        if email:
             payload["email"] = email
 
         return await self._request("POST", "/user", json_data=payload)
@@ -1007,15 +1325,120 @@ class LudusAPIClient:
         )
 
         params = {}
-        if self.api_version == "v2" and delete_default_range:
+        if delete_default_range:
             params["deleteDefaultRange"] = "true"
-        return await self._request("DELETE", f"/user/{user_id}", params=params)
+        return await self._request("DELETE", f"/user/{self._path(user_id)}", params=params)
 
     # Blueprint Management (v2 only)
-    async def list_blueprints(self) -> list[dict[str, Any]]:
-        """List all blueprints."""
-        result = await self._request("GET", "/blueprints")
+    async def list_blueprints(
+        self, from_source: str | None = None, tag: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List all blueprints, optionally filtered by source or tag."""
+        params = {}
+        if from_source:
+            params["from-source"] = from_source
+        if tag:
+            params["tag"] = tag
+        result = await self._request("GET", "/blueprints", params=params)
         return result if isinstance(result, list) else []
+
+    async def get_blueprint(self, blueprint_id: str) -> dict[str, Any]:
+        """Get a blueprint's metadata (name, description, version, tags, source)."""
+        return await self._request("GET", f"/blueprints/{self._path(blueprint_id)}")
+
+    @staticmethod
+    def _config_as_yaml(config: dict[str, Any] | str) -> str:
+        """Render a range config as the YAML string the blueprint API expects.
+
+        The API takes `config` as YAML text, not a JSON object -- posting a dict
+        fails with "cannot unmarshal object into Go struct field ... of type
+        string". Callers naturally pass a dict, so convert here.
+        """
+        if isinstance(config, str):
+            return config
+        return yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
+
+    async def create_blueprint(
+        self,
+        blueprint_id: str,
+        config: dict[str, Any] | str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+        version: str | None = None,
+        tags: list[str] | None = None,
+        min_ludus_version: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new blueprint from a range configuration.
+
+        Args:
+            blueprint_id: Unique identifier for the blueprint.
+            config: The range configuration the blueprint deploys, as a dict or
+                YAML string. Dicts are converted to YAML for the API.
+            name: Human-readable name (defaults to blueprint_id server-side).
+            description: What the blueprint builds.
+            version: Blueprint version string, e.g. "1.0.0".
+            tags: Tags used for discovery and filtering.
+            min_ludus_version: Minimum Ludus version required to deploy it.
+        """
+        payload: dict[str, Any] = {"blueprintID": blueprint_id}
+        for key, value in (
+            ("name", name),
+            ("description", description),
+            ("version", version),
+            ("tags", tags),
+            ("min_ludus_version", min_ludus_version),
+        ):
+            if value is not None:
+                payload[key] = value
+        if config is not None:
+            payload["config"] = self._config_as_yaml(config)
+        return await self._request("POST", "/blueprints", json_data=payload)
+
+    async def export_blueprint(self, blueprint_id: str, output_path: str) -> dict[str, Any]:
+        """Export a blueprint to a .tar.gz archive on disk.
+
+        The endpoint serves gzip, not JSON, so the body is written out verbatim.
+        """
+        result = await self._request(
+            "GET", f"/blueprints/{self._path(blueprint_id)}/export", raw=True
+        )
+        content = result.get("content", b"") if isinstance(result, dict) else b""
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        return {
+            "blueprintID": blueprint_id,
+            "path": str(path),
+            "size_bytes": len(content),
+        }
+
+    async def import_blueprint(self, archive_path: str) -> dict[str, Any]:
+        """Import a blueprint from a .tar.gz archive produced by export_blueprint."""
+        path = Path(archive_path)
+        if not path.is_file():
+            raise ValueError(f"Archive not found: {archive_path}")
+        files = {"archive": (path.name, path.read_bytes(), "application/gzip")}
+        return await self._request("POST", "/blueprints/import", files=files)
+
+    async def install_blueprint(
+        self,
+        blueprint_id: str,
+        make_global: bool = False,
+        force_roles: bool = False,
+    ) -> dict[str, Any]:
+        """Install a blueprint's dependencies (Ansible roles and collections).
+
+        Run this before deploying a blueprint that came from a source, otherwise
+        the deployment fails on missing roles.
+
+        Args:
+            make_global: Install roles globally rather than for the calling user.
+            force_roles: Reinstall roles that are already present.
+        """
+        payload = {"global": make_global, "forceRoles": force_roles}
+        return await self._request(
+            "POST", f"/blueprints/{self._path(blueprint_id)}/install", json_data=payload
+        )
 
     async def create_blueprint_from_range(self, range_id: str, blueprint_id: str | None = None) -> dict[str, Any]:
         """Create a blueprint from an existing range.
@@ -1027,50 +1450,94 @@ class LudusAPIClient:
         payload: dict[str, Any] = {"rangeID": range_id, "blueprintID": blueprint_id or range_id}
         return await self._request("POST", "/blueprints/from-range", json_data=payload)
 
-    async def apply_blueprint(self, blueprint_id: str, range_id: str) -> dict[str, Any]:
-        """Apply a blueprint to a range."""
-        return await self._request("POST", f"/blueprints/{blueprint_id}/apply", json_data={"rangeID": range_id})
+    async def apply_blueprint(
+        self, blueprint_id: str, range_id: str, force: bool = False
+    ) -> dict[str, Any]:
+        """Apply a blueprint to a range, replacing that range's configuration.
 
-    async def copy_blueprint(self, blueprint_id: str) -> dict[str, Any]:
-        """Copy a blueprint."""
-        return await self._request("POST", f"/blueprints/{blueprint_id}/copy")
+        Args:
+            force: Apply even if the range is currently deploying.
+        """
+        payload: dict[str, Any] = {"rangeID": range_id}
+        if force:
+            payload["force"] = True
+        return await self._request(
+            "POST", f"/blueprints/{self._path(blueprint_id)}/apply", json_data=payload
+        )
+
+    async def copy_blueprint(
+        self,
+        blueprint_id: str,
+        new_blueprint_id: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Copy a blueprint under a new ID.
+
+        Args:
+            new_blueprint_id: ID for the copy. Server generates one if omitted.
+            name: Name for the copy.
+            description: Description for the copy.
+        """
+        payload: dict[str, Any] = {}
+        for key, value in (
+            ("blueprintID", new_blueprint_id),
+            ("name", name),
+            ("description", description),
+        ):
+            if value is not None:
+                payload[key] = value
+        return await self._request(
+            "POST",
+            f"/blueprints/{self._path(blueprint_id)}/copy",
+            json_data=payload or None,
+        )
 
     async def delete_blueprint(self, blueprint_id: str) -> dict[str, Any]:
         """Delete a blueprint."""
-        return await self._request("DELETE", f"/blueprints/{blueprint_id}")
+        return await self._request("DELETE", f"/blueprints/{self._path(blueprint_id)}")
 
     async def get_blueprint_config(self, blueprint_id: str) -> dict[str, Any]:
         """Get blueprint configuration."""
-        return await self._request("GET", f"/blueprints/{blueprint_id}/config")
+        return await self._request("GET", f"/blueprints/{self._path(blueprint_id)}/config")
 
-    async def update_blueprint_config(self, blueprint_id: str, config: dict[str, Any]) -> dict[str, Any]:
-        """Update blueprint configuration."""
-        return await self._request("PUT", f"/blueprints/{blueprint_id}/config", json_data=config)
+    async def update_blueprint_config(
+        self, blueprint_id: str, config: dict[str, Any] | str
+    ) -> dict[str, Any]:
+        """Update a blueprint's range configuration.
+
+        The API expects {"config": "<yaml text>"}, not the config object itself.
+        """
+        return await self._request(
+            "PUT",
+            f"/blueprints/{self._path(blueprint_id)}/config",
+            json_data={"config": self._config_as_yaml(config)},
+        )
 
     async def share_blueprint_with_users(self, blueprint_id: str, user_ids: list[str]) -> dict[str, Any]:
         """Share a blueprint with users."""
-        return await self._request("POST", f"/blueprints/{blueprint_id}/share/users", json_data={"userIDs": user_ids})
+        return await self._request("POST", f"/blueprints/{self._path(blueprint_id)}/share/users", json_data={"userIDs": user_ids})
 
     async def unshare_blueprint_with_users(self, blueprint_id: str, user_ids: list[str]) -> dict[str, Any]:
         """Unshare a blueprint from users."""
-        return await self._request("DELETE", f"/blueprints/{blueprint_id}/share/users", json_data={"userIDs": user_ids})
+        return await self._request("DELETE", f"/blueprints/{self._path(blueprint_id)}/share/users", json_data={"userIDs": user_ids})
 
     async def share_blueprint_with_groups(self, blueprint_id: str, group_names: list[str]) -> dict[str, Any]:
         """Share a blueprint with groups."""
-        return await self._request("POST", f"/blueprints/{blueprint_id}/share/groups", json_data={"groupNames": group_names})
+        return await self._request("POST", f"/blueprints/{self._path(blueprint_id)}/share/groups", json_data={"groupNames": group_names})
 
     async def unshare_blueprint_with_groups(self, blueprint_id: str, group_names: list[str]) -> dict[str, Any]:
         """Unshare a blueprint from groups."""
-        return await self._request("DELETE", f"/blueprints/{blueprint_id}/share/groups", json_data={"groupNames": group_names})
+        return await self._request("DELETE", f"/blueprints/{self._path(blueprint_id)}/share/groups", json_data={"groupNames": group_names})
 
     async def list_blueprint_access_users(self, blueprint_id: str) -> list[dict[str, Any]]:
         """List users with access to a blueprint."""
-        result = await self._request("GET", f"/blueprints/{blueprint_id}/access/users")
+        result = await self._request("GET", f"/blueprints/{self._path(blueprint_id)}/access/users")
         return result if isinstance(result, list) else []
 
     async def list_blueprint_access_groups(self, blueprint_id: str) -> list[dict[str, Any]]:
         """List groups with access to a blueprint."""
-        result = await self._request("GET", f"/blueprints/{blueprint_id}/access/groups")
+        result = await self._request("GET", f"/blueprints/{self._path(blueprint_id)}/access/groups")
         return result if isinstance(result, list) else []
 
     # Group Management (v2 only)
@@ -1085,42 +1552,99 @@ class LudusAPIClient:
 
     async def delete_group(self, group_name: str) -> dict[str, Any]:
         """Delete a group."""
-        return await self._request("DELETE", f"/groups/{group_name}")
+        return await self._request("DELETE", f"/groups/{self._path(group_name)}")
 
     async def add_users_to_group(self, group_name: str, user_ids: list[str]) -> dict[str, Any]:
         """Add users to a group."""
-        return await self._request("POST", f"/groups/{group_name}/users", json_data={"userIDs": user_ids})
+        return await self._request("POST", f"/groups/{self._path(group_name)}/users", json_data={"userIDs": user_ids})
 
     async def remove_users_from_group(self, group_name: str, user_ids: list[str]) -> dict[str, Any]:
         """Remove users from a group."""
-        return await self._request("DELETE", f"/groups/{group_name}/users", json_data={"userIDs": user_ids})
+        return await self._request("DELETE", f"/groups/{self._path(group_name)}/users", json_data={"userIDs": user_ids})
 
     async def list_group_members(self, group_name: str) -> list[dict[str, Any]]:
         """List group members."""
-        result = await self._request("GET", f"/groups/{group_name}/users")
+        result = await self._request("GET", f"/groups/{self._path(group_name)}/users")
         return result if isinstance(result, list) else []
 
     async def add_ranges_to_group(self, group_name: str, range_ids: list[str]) -> dict[str, Any]:
         """Add ranges to a group."""
-        return await self._request("POST", f"/groups/{group_name}/ranges", json_data={"rangeIDs": range_ids})
+        return await self._request("POST", f"/groups/{self._path(group_name)}/ranges", json_data={"rangeIDs": range_ids})
 
     async def remove_ranges_from_group(self, group_name: str, range_ids: list[str]) -> dict[str, Any]:
         """Remove ranges from a group."""
-        return await self._request("DELETE", f"/groups/{group_name}/ranges", json_data={"rangeIDs": range_ids})
+        return await self._request("DELETE", f"/groups/{self._path(group_name)}/ranges", json_data={"rangeIDs": range_ids})
 
     async def list_group_ranges(self, group_name: str) -> list[dict[str, Any]]:
         """List group ranges."""
-        result = await self._request("GET", f"/groups/{group_name}/ranges")
+        result = await self._request("GET", f"/groups/{self._path(group_name)}/ranges")
         return result if isinstance(result, list) else []
 
     # VM Management (v2 only)
     async def destroy_vm(self, vm_id: str) -> dict[str, Any]:
         """Destroy a specific VM."""
-        return await self._request("DELETE", f"/vm/{vm_id}")
+        return await self._request("DELETE", f"/vm/{self._path(vm_id)}")
 
-    async def get_console_ticket(self, vm_id: str) -> dict[str, Any]:
-        """Get console WebSocket ticket for a VM."""
-        return await self._request("GET", "/vm/console/ticket", params={"vmID": vm_id})
+    async def get_console_ticket(
+        self, vm_id: str, user_id: str | None = None
+    ) -> dict[str, Any]:
+        """Get a console WebSocket ticket for a VM.
+
+        Args:
+            vm_id: Proxmox VM ID or VM name (names are resolved to IDs).
+            user_id: Owner of the VM, for admins opening someone else's console.
+
+        Note: the query parameter is ``VMID`` and the API is case-sensitive about
+        it — sending ``vmID`` returns HTTP 400 "Invalid VMID".
+        """
+        resolved = str(vm_id)
+        if not resolved.isdigit():
+            try:
+                ids = await self.resolve_vm_ids([resolved], user_id=user_id)
+            except ValueError as e:
+                raise LudusNotFoundError(str(e)) from e
+            if not ids:
+                raise LudusNotFoundError(
+                    f"No VM named '{vm_id}' found in the range. "
+                    "Pass a Proxmox VM ID or a VM name from get_range."
+                )
+            resolved = str(ids[0])
+
+        params: dict[str, Any] = {"VMID": resolved}
+        if user_id:
+            params["userID"] = user_id
+        return await self._request("GET", "/vm/console/ticket", params=params)
+
+    def build_console_view_url(self, ticket: str) -> dict[str, Any]:
+        """Build the console URL for a ticket from get_console_ticket.
+
+        Despite being documented as a plain GET, /vm/console/view is a WebSocket
+        upgrade endpoint — the VNC data channel itself. Requesting it over HTTP
+        always returns 400 "Failed to upgrade connection to WebSocket", so this
+        returns the URL to connect to instead of fetching it.
+        """
+        base = self.base_url.rstrip("/")
+        http_url = f"{base}{self._base_path}/vm/console/view?ticket={quote(ticket, safe='')}"
+        ws_url = http_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+        return {
+            "websocket_url": ws_url,
+            "http_url": http_url,
+            "protocol": "websocket",
+            "note": (
+                "This endpoint is a WebSocket VNC channel, not an HTML page. "
+                "Connect a VNC/noVNC client to websocket_url; a plain HTTP GET "
+                "returns 400 'Failed to upgrade connection to WebSocket'."
+            ),
+            "ticket_expires": "Console tickets are short-lived; request a new one if it fails.",
+        }
+
+    async def get_openapi_spec(self) -> dict[str, Any]:
+        """Fetch the server's own OpenAPI specification.
+
+        Useful for discovering endpoints supported by this particular Ludus
+        version rather than assuming the ones this client was written against.
+        """
+        return await self._request("GET", "/openapi", raw=True)
 
     # Diagnostics (v2 only)
     async def get_diagnostics(self) -> dict[str, Any]:
@@ -1170,15 +1694,15 @@ class LudusAPIClient:
 
     async def assign_range_to_user(self, user_id: str, range_id: str) -> dict[str, Any]:
         """Assign range access to a user."""
-        return await self._request("POST", f"/ranges/assign/{user_id}/{range_id}")
+        return await self._request("POST", f"/ranges/assign/{self._path(user_id)}/{self._path(range_id)}")
 
     async def revoke_range_from_user(self, user_id: str, range_id: str) -> dict[str, Any]:
         """Revoke range access from a user."""
-        return await self._request("DELETE", f"/ranges/revoke/{user_id}/{range_id}")
+        return await self._request("DELETE", f"/ranges/revoke/{self._path(user_id)}/{self._path(range_id)}")
 
     async def list_range_users(self, range_id: str) -> list[dict[str, Any]]:
         """List users with access to a range."""
-        result = await self._request("GET", f"/ranges/{range_id}/users")
+        result = await self._request("GET", f"/ranges/{self._path(range_id)}/users")
         return result if isinstance(result, list) else []
 
     async def list_accessible_ranges(self) -> list[dict[str, Any]]:
@@ -1200,13 +1724,52 @@ class LudusAPIClient:
         return result if isinstance(result, list) else []
 
     # Enhanced Ansible (v2 only)
-    async def move_role_scope(self, role_name: str, scope: str) -> dict[str, Any]:
-        """Move an Ansible role's scope."""
-        return await self._request("PATCH", "/ansible/role/scope", json_data={"name": role_name, "scope": scope})
+    async def move_role_scope(
+        self,
+        role_name: str | list[str],
+        scope: str | bool = "global",
+        copy: bool = False,
+    ) -> dict[str, Any]:
+        """Move Ansible roles between user and global scope.
 
-    async def get_role_vars(self, role_name: str) -> dict[str, Any]:
-        """Get Ansible role variables."""
-        return await self._request("POST", "/ansible/role/vars", json_data={"name": role_name})
+        The API takes {"roles": [...], "global": bool}; a {"name", "scope"} body
+        is rejected with "At least one role name is required".
+
+        Args:
+            role_name: Role name, or a list of role names.
+            scope: "global" or "user" (booleans are accepted too, where True
+                means global).
+            copy: Copy the role into the target scope instead of moving it.
+        """
+        roles = [role_name] if isinstance(role_name, str) else list(role_name)
+        if not roles:
+            raise ValueError("At least one role name is required")
+
+        if isinstance(scope, bool):
+            make_global = scope
+        else:
+            normalized = str(scope).strip().lower()
+            if normalized not in ("global", "user"):
+                raise ValueError(
+                    f"Unknown scope '{scope}'. Use 'global' or 'user'."
+                )
+            make_global = normalized == "global"
+
+        payload: dict[str, Any] = {"roles": roles, "global": make_global}
+        if copy:
+            payload["copy"] = True
+        return await self._request("PATCH", "/ansible/role/scope", json_data=payload)
+
+    async def get_role_vars(self, role_name: str | list[str]) -> dict[str, Any]:
+        """Get Ansible role variables.
+
+        The API takes a "roles" ARRAY; sending {"name": ...} was rejected with
+        "At least one role name is required".
+        """
+        roles = [role_name] if isinstance(role_name, str) else list(role_name)
+        if not roles:
+            raise ValueError("get_role_vars() requires at least one role name.")
+        return await self._request("POST", "/ansible/role/vars", json_data={"roles": roles})
 
     async def list_subscription_roles(self) -> list[dict[str, Any]]:
         """List subscription roles (enterprise)."""
@@ -1224,11 +1787,9 @@ class LudusAPIClient:
 
     async def reset_user_proxmox_password(self, user_id: str) -> dict[str, Any]:
         """Reset a user's Proxmox password (admin only)."""
-        if self.api_version == "v2":
-            payload = {"userID": user_id}
-            return await self._request("POST", "/user/credentials", json_data=payload)
-        payload = {"userID": user_id}
-        return await self._request("POST", "/user/passwordreset", json_data=payload)
+        return await self._request(
+            "POST", "/user/credentials", json_data={"userID": user_id}
+        )
 
     async def get_user_proxmox_credentials(self, user_id: str | None = None) -> dict[str, Any]:
         """Get Proxmox credentials for a user.
@@ -1258,9 +1819,347 @@ class LudusAPIClient:
             payload["userID"] = user_id
         return await self._request("POST", "/user/credentials", json_data=payload)
 
-    async def get_user_apikey(self, user_id: str | None = None) -> dict[str, Any]:
-        """Get or regenerate user API key (admin only).
-        
+    # ==================== QUOTAS (v2) ====================
+    # Quotas cap what a user or group may consume: RAM (MB), CPU cores,
+    # VM count and concurrent ranges.
+
+    async def get_user_quotas(self, user_id: str | None = None) -> dict[str, Any]:
+        """Get quotas for a user (defaults to the caller)."""
+        params = {}
+        if user_id:
+            params["userID"] = user_id
+        return await self._request("GET", "/user/quotas", params=params)
+
+    async def get_all_user_quotas(self) -> list[dict[str, Any]]:
+        """Get quotas for every user (admin only)."""
+        result = await self._request("GET", "/user/quotas/all")
+        return result if isinstance(result, list) else []
+
+    async def get_default_quotas(self) -> dict[str, Any]:
+        """Get the server-wide default quotas applied to new users."""
+        return await self._request("GET", "/user/quotas/defaults")
+
+    async def set_user_quotas(
+        self,
+        user_ids: list[str],
+        quota_ram: int | None = None,
+        quota_cpu: int | None = None,
+        quota_vms: int | None = None,
+        quota_ranges: int | None = None,
+    ) -> dict[str, Any]:
+        """Set quotas for one or more users (admin only).
+
+        Only the quotas you pass are changed; omitted ones keep their current value.
+
+        Args:
+            user_ids: Users to apply the quotas to.
+            quota_ram: RAM limit in MB.
+            quota_cpu: CPU core limit.
+            quota_vms: Maximum number of VMs.
+            quota_ranges: Maximum number of concurrent ranges.
+        """
+        if not user_ids:
+            raise ValueError("user_ids must contain at least one user ID")
+
+        payload: dict[str, Any] = {"userIDs": user_ids}
+        for key, value in (
+            ("quotaRAM", quota_ram),
+            ("quotaCPU", quota_cpu),
+            ("quotaVMs", quota_vms),
+            ("quotaRanges", quota_ranges),
+        ):
+            if value is not None:
+                payload[key] = value
+        return await self._request("PUT", "/user/quotas", json_data=payload)
+
+    async def get_group_quotas(self) -> list[dict[str, Any]]:
+        """Get the default quotas configured for each group (admin only)."""
+        result = await self._request("GET", "/groups/quotas")
+        return result if isinstance(result, list) else []
+
+    async def set_group_quotas(
+        self,
+        group_names: list[str],
+        default_quota_ram: int | None = None,
+        default_quota_cpu: int | None = None,
+        default_quota_vms: int | None = None,
+        default_quota_ranges: int | None = None,
+    ) -> dict[str, Any]:
+        """Set default quotas for one or more groups (admin only).
+
+        These apply to members of the group who have no explicit user quota.
+        """
+        if not group_names:
+            raise ValueError("group_names must contain at least one group name")
+
+        payload: dict[str, Any] = {"groupNames": group_names}
+        for key, value in (
+            ("defaultQuotaRAM", default_quota_ram),
+            ("defaultQuotaCPU", default_quota_cpu),
+            ("defaultQuotaVMs", default_quota_vms),
+            ("defaultQuotaRanges", default_quota_ranges),
+        ):
+            if value is not None:
+                payload[key] = value
+        return await self._request("PUT", "/groups/quotas", json_data=payload)
+
+    # ==================== AUTO-SHUTDOWN (v2) ====================
+
+    async def get_auto_shutdown(
+        self, range_id: str | None = None, user_id: str | None = None
+    ) -> dict[str, Any]:
+        """Get the auto-shutdown timeout for a range."""
+        params = {}
+        if range_id:
+            params["rangeID"] = range_id
+        if user_id:
+            params["userID"] = user_id
+        return await self._request("GET", "/range/auto-shutdown", params=params)
+
+    async def set_auto_shutdown(
+        self,
+        timeout_minutes: int,
+        range_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Set the auto-shutdown timeout for a range.
+
+        Args:
+            timeout_minutes: Idle minutes before the range powers off. 0 disables it.
+        """
+        if timeout_minutes < 0:
+            raise ValueError("timeout_minutes must be 0 (disabled) or a positive number of minutes")
+
+        params = {}
+        if range_id:
+            params["rangeID"] = range_id
+        if user_id:
+            params["userID"] = user_id
+        return await self._request(
+            "PUT",
+            "/range/auto-shutdown",
+            json_data={"autoShutdownTimeout": timeout_minutes},
+            params=params,
+        )
+
+    # ==================== DEPLOYMENT LOG HISTORY (v2) ====================
+    # Ludus keeps prior deployment/build logs, not just the currently running one.
+
+    async def list_range_log_history(
+        self, range_id: str | None = None, user_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List past range deployment logs (most recent first)."""
+        params = {}
+        if range_id:
+            params["rangeID"] = range_id
+        if user_id:
+            params["userID"] = user_id
+        result = await self._request("GET", "/range/logs/history", params=params)
+        return result if isinstance(result, list) else []
+
+    async def get_range_log_from_history(
+        self, log_id: str, range_id: str | None = None
+    ) -> dict[str, Any]:
+        """Get the contents of one archived range deployment log."""
+        params = {}
+        if range_id:
+            params["rangeID"] = range_id
+        return await self._request(
+            "GET", f"/range/logs/history/{self._path(log_id)}", params=params
+        )
+
+    async def list_template_log_history(self) -> list[dict[str, Any]]:
+        """List past template build logs (most recent first)."""
+        result = await self._request("GET", "/templates/logs/history")
+        return result if isinstance(result, list) else []
+
+    async def get_template_log_from_history(self, log_id: str) -> dict[str, Any]:
+        """Get the contents of one archived template build log."""
+        return await self._request("GET", f"/templates/logs/history/{self._path(log_id)}")
+
+    # ==================== SOURCES (v2 content catalogs) ====================
+    # A "source" is a git repo or uploaded archive that publishes blueprints,
+    # packer templates, Ansible roles and collections for installation.
+
+    async def list_sources(self) -> list[dict[str, Any]]:
+        """List configured content sources (v2 only)."""
+        result = await self._request("GET", "/sources")
+        return result if isinstance(result, list) else []
+
+    async def get_source(self, source_id: str) -> dict[str, Any]:
+        """Get details for a single source (v2 only)."""
+        return await self._request("GET", f"/sources/{self._path(source_id)}")
+
+    async def get_source_catalog(self, source_id: str) -> dict[str, Any]:
+        """Get the full catalog (blueprints, templates, roles, collections)."""
+        return await self._request("GET", f"/sources/{self._path(source_id)}/catalog")
+
+    async def list_source_templates(self, source_id: str) -> list[dict[str, Any]]:
+        """List packer templates published by a source."""
+        result = await self._request("GET", f"/sources/{self._path(source_id)}/templates")
+        return result if isinstance(result, list) else []
+
+    async def list_source_blueprints(self, source_id: str) -> list[dict[str, Any]]:
+        """List blueprints published by a source."""
+        result = await self._request("GET", f"/sources/{self._path(source_id)}/blueprints")
+        return result if isinstance(result, list) else []
+
+    async def list_source_roles(self, source_id: str) -> list[dict[str, Any]]:
+        """List Ansible roles published by a source."""
+        result = await self._request("GET", f"/sources/{self._path(source_id)}/roles")
+        return result if isinstance(result, list) else []
+
+    async def list_source_collections(self, source_id: str) -> list[dict[str, Any]]:
+        """List Ansible collections published by a source."""
+        result = await self._request("GET", f"/sources/{self._path(source_id)}/collections")
+        return result if isinstance(result, list) else []
+
+    async def install_from_source(
+        self,
+        source_id: str,
+        templates: list[str] | None = None,
+        blueprints: list[str] | None = None,
+        roles: list[str] | None = None,
+        collections: list[str] | None = None,
+        install_globally: bool = False,
+        force: bool = False,
+        no_deps: bool = False,
+    ) -> dict[str, Any]:
+        """Install selected items from a source.
+
+        The selection REPLACES the source's persisted selection - items added
+        upstream later do not extend it, and omitting a category leaves it
+        empty. Pass everything you want installed in one call.
+
+        Args:
+            source_id: Source to install from
+            templates: Packer template names
+            blueprints: sourceBlueprintID values
+            roles: Source-bundled role names
+            collections: Source-bundled collection FQCNs (namespace.name)
+            install_globally: Admin only - install roles/collections for all users
+            force: Reinstall items that are already present
+            no_deps: Skip installing dependencies of the selected items
+        """
+        selection: dict[str, list[str]] = {}
+        if templates:
+            selection["templates"] = list(templates)
+        if blueprints:
+            selection["blueprints"] = list(blueprints)
+        if roles:
+            selection["localRoles"] = list(roles)
+        if collections:
+            selection["localCollections"] = list(collections)
+
+        if not selection:
+            raise ValueError(
+                "install_from_source() needs at least one of templates, "
+                "blueprints, roles or collections."
+            )
+
+        payload: dict[str, Any] = {"selection": selection}
+        if install_globally:
+            payload["global"] = True
+        if force:
+            payload["force"] = True
+        if no_deps:
+            payload["noDeps"] = True
+
+        return await self._request("POST", f"/sources/{self._path(source_id)}/install", json_data=payload)
+
+    async def sync_source(self, source_id: str) -> dict[str, Any]:
+        """Re-fetch a source so its catalog reflects upstream."""
+        return await self._request("POST", f"/sources/{self._path(source_id)}/sync")
+
+    async def delete_source(self, source_id: str) -> dict[str, Any]:
+        """Remove a source (does not uninstall what it already installed)."""
+        return await self._request("DELETE", f"/sources/{self._path(source_id)}")
+
+    async def add_source(
+        self,
+        source_id: str,
+        source_type: str = "git",
+        url: str | None = None,
+        ref: str | None = None,
+        archive_path: str | None = None,
+        make_global: bool = False,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Register a new content source.
+
+        Args:
+            source_id: Identifier to give the source (e.g. "ludus-source-bsl").
+            source_type: "git" for a repository, "archive" for an uploaded tarball.
+            url: Git URL. Required when source_type is "git".
+            ref: Branch, tag or commit to track. Defaults to the repo's default branch.
+            archive_path: Local path to a .tar.gz. Required when source_type is "archive".
+            make_global: Make the source available to all users (admin only).
+            force: Overwrite an existing source with the same ID.
+        """
+        if source_type == "git" and not url:
+            raise ValueError("url is required when source_type is 'git'")
+        if source_type == "archive" and not archive_path:
+            raise ValueError("archive_path is required when source_type is 'archive'")
+
+        form: dict[str, Any] = {
+            "id": source_id,
+            "type": source_type,
+            "global": str(make_global).lower(),
+            "force": str(force).lower(),
+        }
+        if url:
+            form["url"] = url
+        if ref:
+            form["ref"] = ref
+
+        files = None
+        if archive_path:
+            path = Path(archive_path)
+            if not path.is_file():
+                raise ValueError(f"Archive not found: {archive_path}")
+            files = {"archive": (path.name, path.read_bytes(), "application/gzip")}
+
+        return await self._request("POST", "/sources", data=form, files=files)
+
+    async def update_source(
+        self,
+        source_id: str,
+        url: str | None = None,
+        ref: str | None = None,
+        archive_path: str | None = None,
+        make_global: bool | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Update an existing source's URL, tracked ref, or backing archive.
+
+        Only the fields you pass are changed.
+        """
+        form: dict[str, Any] = {"force": str(force).lower()}
+        if url:
+            form["url"] = url
+        if ref:
+            form["ref"] = ref
+        if make_global is not None:
+            form["global"] = str(make_global).lower()
+
+        files = None
+        if archive_path:
+            path = Path(archive_path)
+            if not path.is_file():
+                raise ValueError(f"Archive not found: {archive_path}")
+            files = {"archive": (path.name, path.read_bytes(), "application/gzip")}
+
+        return await self._request(
+            "PATCH", f"/sources/{self._path(source_id)}", data=form, files=files
+        )
+
+    async def regenerate_user_apikey(self, user_id: str | None = None) -> dict[str, Any]:
+        """Issue a NEW API key for a user, invalidating the old one (admin only).
+
+        Despite being a GET, this endpoint is destructive: it mints a fresh key
+        every time it is called and there is no way to read back an existing
+        key. Callers must not treat it as a lookup.
+
         Args:
             user_id: Optional user ID (defaults to caller's user if not specified)
         """

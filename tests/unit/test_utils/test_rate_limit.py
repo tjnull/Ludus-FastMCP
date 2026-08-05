@@ -113,6 +113,34 @@ class TestRateLimiter:
         assert len(results) == 10
         assert set(results) == set(range(10))
 
+    @pytest.mark.asyncio
+    async def test_over_limit_does_not_deadlock(self):
+        """Waiting for a slot must not be done while holding the lock.
+
+        acquire() used to recurse into itself inside `async with self._lock`;
+        asyncio.Lock is not reentrant, so the retry blocked forever. Bounded by
+        wait_for so a regression fails fast instead of hanging the suite.
+        """
+        limiter = RateLimiter(max_requests=1, window_seconds=0.2)
+
+        await limiter.acquire()
+        await asyncio.wait_for(limiter.acquire(), timeout=5)
+
+        assert limiter.get_current_usage()["current_requests"] == 1
+
+    @pytest.mark.asyncio
+    async def test_lock_is_released_while_waiting(self):
+        """A waiting caller must not stall unrelated callers on the same limiter."""
+        limiter = RateLimiter(max_requests=1, window_seconds=0.3)
+        await limiter.acquire()
+
+        # This one has to wait for the window; usage stats take the same lock.
+        waiter = asyncio.create_task(limiter.acquire())
+        await asyncio.sleep(0.05)
+
+        assert limiter.get_current_usage()["current_requests"] == 1
+        await asyncio.wait_for(waiter, timeout=5)
+
     def test_get_rate_limiter_singleton(self):
         """Test that get_rate_limiter returns a singleton."""
         limiter1 = get_rate_limiter()

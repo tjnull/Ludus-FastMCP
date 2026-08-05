@@ -40,32 +40,32 @@ class RateLimiter:
         This will block if the rate limit has been exceeded, waiting
         until a request slot becomes available.
         """
-        async with self._lock:
-            now = datetime.now()
+        while True:
+            async with self._lock:
+                now = datetime.now()
 
-            # Remove requests outside the time window
-            while self.requests and (now - self.requests[0]) > self.window:
-                self.requests.popleft()
+                # Remove requests outside the time window
+                while self.requests and (now - self.requests[0]) > self.window:
+                    self.requests.popleft()
 
-            # If at limit, calculate sleep time
-            if len(self.requests) >= self.max_requests:
-                # Sleep until the oldest request expires
-                oldest_request = self.requests[0]
-                sleep_until = oldest_request + self.window
-                sleep_time = (sleep_until - now).total_seconds()
+                # Under the limit: claim a slot and go
+                if len(self.requests) < self.max_requests:
+                    self.requests.append(now)
+                    return
 
-                if sleep_time > 0:
-                    logger.debug(
-                        f"Rate limit reached ({len(self.requests)}/{self.max_requests}). "
-                        f"Waiting {sleep_time:.1f}s..."
-                    )
-                    await asyncio.sleep(sleep_time)
+                # At the limit: wait until the oldest request expires
+                sleep_time = (self.requests[0] + self.window - now).total_seconds()
+                in_flight = len(self.requests)
 
-                # Recursive call after sleeping
-                return await self.acquire()
-
-            # Record this request
-            self.requests.append(now)
+            # Sleep outside the lock. Sleeping while holding it would stall every
+            # other caller, and re-entering acquire() under it would deadlock:
+            # asyncio.Lock is not reentrant.
+            if sleep_time > 0:
+                logger.debug(
+                    f"Rate limit reached ({in_flight}/{self.max_requests}). "
+                    f"Waiting {sleep_time:.1f}s..."
+                )
+                await asyncio.sleep(sleep_time)
 
     def get_current_usage(self) -> dict[str, any]:
         """Get current rate limiter statistics.

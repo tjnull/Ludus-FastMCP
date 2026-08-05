@@ -61,7 +61,18 @@ class Settings(BaseSettings):
     ludus_api_url: str = "http://localhost:8080"
     ludus_api_key: str = ""
     ludus_ssl_verify: bool = False  # Default False for self-signed certs in lab environments
-    ludus_api_version: str = "auto"  # "auto", "v1", or "v2"
+    # This release targets the Ludus 2.x API only. "auto" and "v2" are
+    # equivalent; "v1" is rejected at client construction.
+    ludus_api_version: str = "auto"
+    # Provisioning calls (user creation, range deploy) routinely take longer
+    # than a typical HTTP timeout; 30s caused "timed out" on requests the
+    # server had actually completed.
+    ludus_api_timeout: float = 120.0
+
+    # Daemon mode serves MCP over HTTP: a backgrounded stdio server has no
+    # client on stdin, reads EOF and exits immediately.
+    mcp_daemon_host: str = "127.0.0.1"
+    mcp_daemon_port: int = 8765
     ludus_jwt_token: str = ""  # JWT Bearer token for Pro/SSO users
 
     # LLM Configuration (supports multiple providers)

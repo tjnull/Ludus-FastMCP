@@ -1,4 +1,8 @@
-"""Tests for FastMCP-version-agnostic tool name listing (issue #6)."""
+"""Tests for tool name listing (issue #6).
+
+FastMCP 3.x's list_tools() returns one entry per tool version, so names can
+repeat; --list-tools and the --verbose tool count both need unique names.
+"""
 
 import pytest
 
@@ -10,32 +14,28 @@ class _Tool:
         self.name = name
 
 
-class FastMCP2Style:
-    """FastMCP 2.x: get_tools() -> dict[str, Tool]."""
-
-    async def get_tools(self):
-        return {"beta": _Tool("beta"), "alpha": _Tool("alpha")}
-
-
-class FastMCP3Style:
-    """FastMCP 3.x: no get_tools(); list_tools() -> Sequence[Tool]."""
+class FakeMCP:
+    def __init__(self, *names):
+        self._tools = [_Tool(name) for name in names]
 
     async def list_tools(self):
-        # 3.x returns one entry per tool version, so names can repeat
-        return [_Tool("beta"), _Tool("alpha"), _Tool("beta")]
+        return self._tools
 
 
 @pytest.mark.asyncio
-async def test_get_tool_names_with_fastmcp_2_api():
-    assert await _get_tool_names(FastMCP2Style()) == ["alpha", "beta"]
+async def test_get_tool_names_returns_sorted_names():
+    assert await _get_tool_names(FakeMCP("gamma", "alpha", "beta")) == [
+        "alpha",
+        "beta",
+        "gamma",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_get_tool_names_with_fastmcp_3_api():
-    assert await _get_tool_names(FastMCP3Style()) == ["alpha", "beta"]
+async def test_get_tool_names_deduplicates_repeated_versions():
+    assert await _get_tool_names(FakeMCP("beta", "alpha", "beta")) == ["alpha", "beta"]
 
 
 @pytest.mark.asyncio
-async def test_get_tool_names_returns_sorted_unique_names():
-    names = await _get_tool_names(FastMCP3Style())
-    assert names == sorted(set(names))
+async def test_get_tool_names_handles_empty_server():
+    assert await _get_tool_names(FakeMCP()) == []

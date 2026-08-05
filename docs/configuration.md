@@ -15,7 +15,7 @@ Complete configuration reference for Ludus FastMCP, including environment variab
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LUDUS_API_VERSION` | `auto` | API version selection: `auto` (default), `v1`, or `v2`. Auto-detects the server version on first API call. |
+| `LUDUS_API_VERSION` | `auto` | `auto` (default) verifies the server is Ludus 2.x on the first call; `v2` asserts it and skips that check. `v1` is rejected -- this release is Ludus 2.x only. |
 | `LUDUS_JWT_TOKEN` | — | JWT Bearer token for Pro/SSO users. When set, takes precedence over `LUDUS_API_KEY`. |
 | `LUDUS_SSL_VERIFY` | `false` | Enable SSL certificate verification |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (DEBUG, INFO, WARNING, ERROR) |
@@ -256,7 +256,7 @@ After configuring your MCP client:
 List all available Ludus tools
 ```
 
-Successful response displays 157 tools organized by category.
+Successful response displays 231 tools organized by category.
 
 ## ludus-ai Client Configuration
 
@@ -285,33 +285,47 @@ ludus-ai clear-cache --all
 ludus-ai clear-cache --opencode
 ```
 
-## Ludus 2.0 Support
+## Ludus Server Version
 
-Ludus FastMCP supports both Ludus v1 and v2 servers. This section covers what changes with v2 and how to configure the server accordingly.
+This release speaks the Ludus 2.x API only. Every request goes to `/api/v2`.
 
-### Auto-Detection
+### Verification
 
-By default (`LUDUS_API_VERSION=auto`), the server automatically detects whether it is connected to a v1 or v2 Ludus instance on the first API call. No manual configuration is needed in most cases.
+By default (`LUDUS_API_VERSION=auto`) the client asks the server for its version
+on the first call and refuses to continue if the answer is not a 2.x server:
 
-### Overriding the API Version
+```
+https://ludus.example:8080 does not serve the Ludus 2.x API
+(GET /api/v2/ returned HTTP 404). This release requires Ludus 2.0 or later;
+upgrade the server, or pin ludus-fastmcp to a 1.x release for a Ludus 1.x server.
+```
 
-If you want to skip auto-detection and target a specific version, set the environment variable explicitly:
+Checking once, up front, means a version mismatch is reported plainly rather
+than appearing as an unexplained 404 from whichever tool ran first.
+
+### Skipping the check
+
+If you already know the server is 2.x, assert it and save the round-trip:
 
 ```bash
 export LUDUS_API_VERSION=v2
 ```
 
-This can be useful in CI/CD pipelines or when connecting to a known v2 server to avoid the initial detection round-trip.
+Useful in CI, or anywhere you would rather not spend a request per session.
 
-### Backwards Compatibility
+### Ludus 1.x servers
 
-All existing tools continue to work on v1 servers without any changes. Upgrading Ludus FastMCP does not break existing v1 workflows.
+`LUDUS_API_VERSION=v1` is rejected at startup rather than silently ignored:
 
-### v2-Only Tools
+```
+LUDUS_API_VERSION=v1 is no longer supported. This release targets the Ludus 2.x
+API only. Upgrade your Ludus server to 2.0 or later, or pin ludus-fastmcp to a
+1.x release for a v1 server.
+```
 
-Ludus 2.0 introduces new tool categories (Blueprints, Groups, VM Management, Diagnostics & Migration, and enhanced Range Management). These tools are always visible regardless of the detected server version, but calling them against a v1 server will return a clear error message indicating that the tool requires Ludus v2.
-
-See the [Tools Reference](tools-reference.md) for the full list of v2-only tools.
+Blueprints, content sources, groups, quotas, deployment log history and VM
+console access have no equivalent in the 1.x API, so upgrading the server is the
+better path.
 
 ### JWT Authentication (Pro / SSO)
 

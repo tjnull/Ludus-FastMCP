@@ -15,7 +15,7 @@ from ludus_mcp.scenarios.skeleton_templates import (
     VMSkeletons,
     RangeSkeletons,
     YAML_EXAMPLES,
-    get_yaml_example,
+    get_yaml_example as _get_yaml_example,
     list_yaml_examples,
 )
 from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_response
@@ -1120,7 +1120,10 @@ def create_custom_builder_tools(client: LudusAPIClient) -> FastMCP:
             #   ludus range deploy
         """
         try:
-            yaml_content = get_yaml_example(name)
+            # NB: the MCP tool below is also called get_yaml_example and
+            # shadows the import, so calling it unaliased returned an
+            # un-awaited coroutine and the tool failed output validation.
+            yaml_content = _get_yaml_example(name)
             return {
                 "status": "success",
                 "example_name": name,

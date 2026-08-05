@@ -25,42 +25,57 @@ def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def add_template(
-        name: str,
-        url: str,
-        description: str | None = None,
-        user_id: str | None = None
+        directory: str,
+        force: bool = False,
+        user_id: str | None = None,
     ) -> dict:
-        """Add a new template to the system.
+        """Add a packer template to Ludus by uploading a local directory.
+
+        Ludus templates are packer build directories, not image URLs. The
+        directory is tarred and uploaded; Windows templates must contain an
+        Autounattend.xml at their root. Adding a template does not build it --
+        follow with build_template.
 
         Args:
-            name: Template name
-            url: Template URL or image source
-            description: Optional template description
+            directory: Path to the local template directory
+            force: Replace the template on the server if it already exists
             user_id: Optional user ID (admin only)
 
         Returns:
             Template addition result
         """
-        result = await client.add_template(name, url, description, user_id)
-        return format_tool_response(result)
+        result = await client.add_template(directory, force, user_id)
+        return format_tool_response(
+            {
+                "result": result,
+                "next_step": "The template is added but not built. Run build_template to build it.",
+            }
+        )
 
     @mcp.tool()
     async def build_template(
-        template_id: str,
-        force: bool = False,
+        templates: list[str] | None = None,
+        parallel: int = 1,
         user_id: str | None = None
     ) -> dict:
-        """Build a template.
+        """Start a packer build for one or more VM templates.
+
+        Builds run on the Ludus server and take a long time (tens of minutes to
+        hours each). This returns as soon as the build is queued; poll
+        get_template_status or get_template_logs to follow progress.
 
         Args:
-            template_id: Template ID to build
-            force: Force rebuild even if template exists
+            templates: Template names to build. Omit to build every template
+                that is not built yet.
+            parallel: How many templates to build concurrently
             user_id: Optional user ID (admin only)
 
         Returns:
             Build initiation result
         """
-        result = await client.build_template(template_id, force, user_id)
+        result = await client.build_template(
+            template_name=templates, parallel=parallel, user_id=user_id
+        )
         return format_tool_response(result)
 
     @mcp.tool()
@@ -81,74 +96,53 @@ def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
         return format_tool_response(result)
 
     @mcp.tool()
-    async def get_template_status(
-        template_id: str,
-        user_id: str | None = None
-    ) -> dict:
-        """Get template build status.
+    async def get_template_status(user_id: str | None = None) -> dict:
+        """Get the status of in-progress packer builds.
+
+        Ludus reports build status per user, not per template.
 
         Args:
-            template_id: Template ID
             user_id: Optional user ID (admin only)
 
         Returns:
-            Template build status
+            Templates currently building
         """
-        result = await client.get_template_status(template_id, user_id)
+        result = await client.get_template_status(user_id=user_id)
         return format_tool_response(result)
 
     @mcp.tool()
     async def get_template_logs(
-        template_id: str,
+        tail: int | None = None,
         user_id: str | None = None
     ) -> str:
-        """Get template build logs.
+        """Get the latest packer build logs.
+
+        Ludus keeps one build log per user, not per template.
 
         Args:
-            template_id: Template ID
+            tail: Only return the last N lines
             user_id: Optional user ID (admin only)
 
         Returns:
             Template build logs
         """
-        result = await client.get_template_logs(template_id, user_id)
+        result = await client.get_template_logs(user_id=user_id, tail=tail)
         return result
 
     @mcp.tool()
-    async def abort_template_build(
-        template_id: str,
-        user_id: str | None = None
-    ) -> dict:
-        """Abort a template build.
+    async def abort_template_build(user_id: str | None = None) -> dict:
+        """Abort the running packer build(s).
+
+        Ludus aborts the user's current template operation; it cannot abort one
+        specific template while leaving others running.
 
         Args:
-            template_id: Template ID
             user_id: Optional user ID (admin only)
 
         Returns:
             Abort result
         """
-        result = await client.abort_template_build(template_id, user_id)
-        return format_tool_response(result)
-
-    @mcp.tool()
-    async def apply_template(
-        vm_name: str,
-        template_id: str,
-        user_id: str | None = None
-    ) -> dict:
-        """Apply a template to a VM.
-
-        Args:
-            vm_name: Name of the VM to apply template to
-            template_id: Template ID to apply
-            user_id: Optional user ID (admin only)
-
-        Returns:
-            Template application result
-        """
-        handler = registry.get_handler("template_advanced", TemplateAdvancedHandler)
-        result = await handler.apply_template(vm_name, template_id, user_id)
+        result = await client.abort_template_operation(user_id)
         return format_tool_response(result)
 
     # ==================== TEMPLATE BUILDER TOOLS ====================
@@ -286,7 +280,7 @@ def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
     async def get_template_dependencies(
         template_id: str,
         user_id: str | None = None
-    ) -> list[dict]:
+    ) -> dict:
         """Get template dependencies.
 
         Args:
@@ -321,20 +315,37 @@ def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
     # ==================== ANSIBLE V2 TOOLS ====================
 
     @mcp.tool()
-    async def move_ansible_role_scope(role_name: str, scope: str) -> dict:
-        """Move an Ansible role's scope (Ludus 2.0 only).
+    async def move_ansible_role_scope(
+        role_name: str, scope: str = "global", copy: bool = False
+    ) -> dict:
+        """Move Ansible roles between user and global scope (Ludus 2.0 only).
+
+        A globally scoped role is usable by every user on the server; a
+        user-scoped role is private to its owner. Promoting a role to global is
+        how you make a custom role available to a whole class or team.
 
         Args:
-            role_name: Name of the role to move
-            scope: New scope for the role
+            role_name: Role to move, or several separated by commas
+            scope: "global" or "user"
+            copy: Copy into the target scope instead of moving
 
         Returns:
-            Move result
+            Per-role success and error details
         """
-        guard = require_v2(client, "Ansible Role Scope Management")
+        guard = await require_v2(client, "Ansible Role Scope Management")
         if guard:
             return guard
-        result = await client.move_role_scope(role_name, scope)
+
+        roles = [r.strip() for r in role_name.split(",") if r.strip()]
+        if not roles:
+            return {"error": "At least one role name is required"}
+        if scope.strip().lower() not in ("global", "user"):
+            return {
+                "error": f"Unknown scope '{scope}'",
+                "hint": "Use 'global' (available to all users) or 'user' (private)",
+            }
+
+        result = await client.move_role_scope(roles, scope, copy)
         return format_tool_response(result)
 
     @mcp.tool()
@@ -347,7 +358,7 @@ def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Role variables
         """
-        guard = require_v2(client, "Ansible Role Variables")
+        guard = await require_v2(client, "Ansible Role Variables")
         if guard:
             return guard
         result = await client.get_role_vars(role_name)
@@ -360,7 +371,7 @@ def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             List of subscription roles
         """
-        guard = require_v2(client, "Subscription Roles")
+        guard = await require_v2(client, "Subscription Roles")
         if guard:
             return guard
         result = await client.list_subscription_roles()
@@ -376,7 +387,7 @@ def create_template_advanced_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Installation result
         """
-        guard = require_v2(client, "Subscription Roles")
+        guard = await require_v2(client, "Subscription Roles")
         if guard:
             return guard
         result = await client.install_subscription_roles(roles)

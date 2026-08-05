@@ -5,6 +5,7 @@ to improve performance and reduce load on the Ludus server.
 """
 
 import asyncio
+from collections import OrderedDict
 from functools import wraps
 from datetime import datetime, timedelta
 import hashlib
@@ -36,7 +37,10 @@ class AsyncLRUCache:
     def __init__(self, max_size: int = 128, ttl_seconds: int = 60):
         self.max_size = max_size
         self.ttl = timedelta(seconds=ttl_seconds)
-        self.cache: dict[str, tuple[Any, datetime]] = {}
+        # Ordered by recency of use: least recently used first, so eviction is
+        # popitem(last=False). The stored datetime is the insertion time and
+        # drives TTL only - reads must not extend an entry's lifetime.
+        self.cache: OrderedDict[str, tuple[Any, datetime]] = OrderedDict()
         self._lock = asyncio.Lock()
         self._hits = 0
         self._misses = 0
@@ -89,6 +93,9 @@ class AsyncLRUCache:
                 cached_value, cached_time = self.cache[key]
 
                 if (now - cached_time) < self.ttl:
+                    # Mark as most recently used, but keep the insertion time so
+                    # a hot key still expires on schedule.
+                    self.cache.move_to_end(key)
                     self._hits += 1
                     logger.debug(f"Cache hit for key: {key[:8]}...")
                     return cached_value
@@ -103,14 +110,14 @@ class AsyncLRUCache:
         result = await func(*args, **kwargs)
 
         async with self._lock:
-            # Cache the result
+            # Cache the result as most recently used
             self.cache[key] = (result, datetime.now())
+            self.cache.move_to_end(key)
 
-            # Evict oldest entry if over size limit
-            if len(self.cache) > self.max_size:
-                oldest_key = min(self.cache.keys(), key=lambda k: self.cache[k][1])
-                del self.cache[oldest_key]
-                logger.debug(f"Cache evicted oldest key: {oldest_key[:8]}...")
+            # Over the size limit: drop the least recently used entry
+            while len(self.cache) > self.max_size:
+                evicted_key, _ = self.cache.popitem(last=False)
+                logger.debug(f"Cache evicted LRU key: {evicted_key[:8]}...")
 
         return result
 
@@ -186,7 +193,10 @@ def cached(ttl_seconds: int = 30, max_size: int = 256):
     """
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        cache = get_cache(max_size=max_size, ttl_seconds=ttl_seconds)
+        # A dedicated cache per decorated function. Sharing the global instance
+        # would silently ignore this decorator's ttl_seconds/max_size whenever
+        # something else had already created it with different values.
+        cache = AsyncLRUCache(max_size=max_size, ttl_seconds=ttl_seconds)
 
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> T:

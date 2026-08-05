@@ -28,7 +28,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             List of all groups
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)
@@ -45,7 +45,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Created group information
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)
@@ -62,7 +62,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Deletion result
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)
@@ -80,7 +80,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Result of adding users
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)
@@ -98,7 +98,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Result of removing users
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)
@@ -115,7 +115,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             List of group members
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)
@@ -133,7 +133,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Result of adding ranges
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)
@@ -151,7 +151,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Result of removing ranges
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)
@@ -168,7 +168,7 @@ def create_group_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             List of ranges in the group
         """
-        guard = require_v2(client, "Groups")
+        guard = await require_v2(client, "Groups")
         if guard:
             return guard
         handler = registry.get_handler("group", GroupHandler)

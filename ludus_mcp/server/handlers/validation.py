@@ -69,15 +69,26 @@ class ValidationHandler:
             await self._validate_vms(vms, errors, warnings, recommendations)
 
         # Validate networks (if provided in ludus config, otherwise check root level)
-        if not networks:
-            # Check if networks are at root level (scenario format)
-            networks = config.get("network", {}).get("rules", []) if isinstance(config.get("network"), dict) else []
+        # NOTE: config["network"]["rules"] are inter-VLAN FIREWALL RULES, not
+        # network definitions - they have vlan_src/vlan_dst/action and never a
+        # CIDR. Feeding them to the network validator rejected every real Ludus
+        # config that defines inter-VLAN rules.
+        network_block = config.get("network")
+        vlan_rules = network_block.get("rules", []) if isinstance(network_block, dict) else []
+        if vlan_rules:
+            self._validate_vlan_rules(vlan_rules, errors, warnings)
         if networks:
             self._validate_networks(networks, errors, warnings)
 
-        # Validate network assignments
+        # Validate network assignments (real network definitions only)
         if vms and networks:
             self._validate_network_assignments(vms, networks, errors, warnings)
+
+        # Validate AD content (users vs the groups that will exist)
+        self._validate_ad_content(vms, errors, warnings)
+
+        # Validate Windows hostnames survive NetBIOS truncation
+        self._validate_windows_hostnames(vms, errors, warnings)
 
         # Validate resources
         self._validate_resources(vms, warnings, recommendations)
@@ -103,21 +114,23 @@ class ValidationHandler:
         recommendations: list[str]
     ) -> None:
         """Validate VM configurations."""
-        # Get available templates
+        # Get available templates. list_templates() returns a list; calling
+        # .get("templates") on it raised AttributeError every time, which was
+        # swallowed below - silently skipping template validation entirely.
         try:
             templates_response = await self.client.list_templates()
-            available_templates = [t.get("name", "") for t in templates_response.get("templates", [])]
+            if isinstance(templates_response, dict):
+                templates_response = templates_response.get("templates", [])
+            available_templates = [
+                t.get("name", "") for t in templates_response if isinstance(t, dict)
+            ]
         except Exception as e:
             logger.warning(f"Could not fetch templates: {e}")
             available_templates = []
 
-        # Get installed roles
-        try:
-            roles_response = await self.client.list_roles()
-            installed_roles = roles_response.get("roles", [])
-        except Exception as e:
-            logger.warning(f"Could not fetch roles: {e}")
-            installed_roles = []
+        # Ludus exposes no endpoint for listing installed Ansible roles, so role
+        # names cannot be checked here; the deploy step reports unknown roles.
+        installed_roles: list[str] = []
 
         vm_names = set()
 
@@ -184,6 +197,177 @@ class ValidationHandler:
                         field=f"ludus.vms[{i}].disk_size_gb",
                         message=f"VM '{vm_name}' has very small disk ({disk_gb}GB). Minimum recommended: 30GB",
                         severity="warning"
+                    )
+                )
+
+    # Groups that already exist in a fresh AD install (CN=Builtin / CN=Users).
+    # Users may be assigned to these without the config creating them.
+    AD_BUILTIN_GROUPS = {
+        "Domain Users", "Domain Admins", "Domain Guests", "Domain Computers",
+        "Enterprise Admins", "Schema Admins", "Administrators", "Users", "Guests",
+        "Power Users", "Backup Operators", "Remote Desktop Users", "IIS_IUSRS",
+        "Print Operators", "Server Operators", "Account Operators",
+        "Group Policy Creator Owners", "Protected Users", "Remote Management Users",
+    }
+
+    NETBIOS_MAX = 15
+
+    def _validate_windows_hostnames(
+        self,
+        vms: list[dict],
+        errors: list[ValidationError],
+        warnings: list[ValidationError],
+    ) -> None:
+        """Windows hostnames must stay unique within 15 characters.
+
+        Ludus truncates them to the NetBIOS limit and rejects the config with
+        "duplicate Windows hostname name found" - a late failure for something
+        that is obvious at build time.
+        """
+        seen: dict[str, str] = {}
+        for i, vm in enumerate(vms):
+            if not isinstance(vm, dict):
+                continue
+            if "win" not in str(vm.get("template", "")).lower():
+                continue
+            hostname = str(vm.get("hostname", ""))
+            if not hostname:
+                continue
+            # Assume a modest range ID; a longer one only truncates harder
+            resolved = hostname.replace("{{ range_id }}", "rangeid")
+            key = resolved[: self.NETBIOS_MAX]
+            if key in seen:
+                errors.append(
+                    ValidationError(
+                        field=f"ludus[{i}].hostname",
+                        message=(
+                            f"Windows hostname '{hostname}' collides with "
+                            f"'{seen[key]}' once truncated to {self.NETBIOS_MAX} "
+                            f"characters ('{key}'). Ludus will reject this config."
+                        ),
+                        severity="error",
+                    )
+                )
+            else:
+                seen[key] = hostname
+
+    def _validate_ad_content(
+        self,
+        vms: list[dict],
+        errors: list[ValidationError],
+        warnings: list[ValidationError],
+    ) -> None:
+        """Check AD users are only assigned to groups that will exist.
+
+        Assigning a user to a group that is neither defined in the config nor an
+        AD built-in fails the deployment on the domain controller with
+        "Failed to find the AD object DNs for groups.set. Invalid identities" -
+        an hour into a deploy, and naming the user rather than the group.
+        """
+        for i, vm in enumerate(vms):
+            if not isinstance(vm, dict):
+                continue
+            ad = (vm.get("role_vars") or {}).get("ludus_ad")
+            if not isinstance(ad, dict):
+                continue
+
+            defined = {
+                g.get("name") if isinstance(g, dict) else g
+                for g in (ad.get("groups") or [])
+            }
+            defined = {g for g in defined if g}
+
+            for user in ad.get("users") or []:
+                if not isinstance(user, dict):
+                    continue
+                groups = user.get("groups") or []
+                if isinstance(groups, str):
+                    groups = [groups]
+                for group in groups:
+                    if group in defined or group in self.AD_BUILTIN_GROUPS:
+                        continue
+                    errors.append(
+                        ValidationError(
+                            field=f"ludus[{i}].role_vars.ludus_ad.users",
+                            message=(
+                                f"AD user '{user.get('name', '?')}' is assigned to group "
+                                f"'{group}', which is neither defined in ludus_ad.groups "
+                                f"nor an AD built-in. Domain controller setup will fail."
+                            ),
+                            severity="error",
+                        )
+                    )
+
+    VALID_RULE_ACTIONS = {"ACCEPT", "REJECT", "DROP"}
+
+    def _validate_vlan_rules(
+        self,
+        rules: list[dict],
+        errors: list[ValidationError],
+        warnings: list[ValidationError]
+    ) -> None:
+        """Validate inter-VLAN firewall rules (config["network"]["rules"]).
+
+        These are firewall rules, not networks: each needs a source and
+        destination VLAN and an action, and never has a CIDR.
+        """
+        for i, rule in enumerate(rules):
+            if not isinstance(rule, dict):
+                errors.append(
+                    ValidationError(
+                        field=f"network.rules[{i}]",
+                        message=f"Rule {i} is not a mapping",
+                        severity="error",
+                    )
+                )
+                continue
+
+            name = rule.get("name", f"rule-{i}")
+
+            for key in ("vlan_src", "vlan_dst"):
+                value = rule.get(key)
+                if value is None:
+                    errors.append(
+                        ValidationError(
+                            field=f"network.rules[{i}].{key}",
+                            message=f"Rule '{name}' is missing {key}",
+                            severity="error",
+                        )
+                    )
+                elif not isinstance(value, int) and str(value).lower() != "all":
+                    errors.append(
+                        ValidationError(
+                            field=f"network.rules[{i}].{key}",
+                            message=f"Rule '{name}' has a non-numeric {key}: {value!r}",
+                            severity="error",
+                        )
+                    )
+
+            action = str(rule.get("action", "")).upper()
+            if not action:
+                errors.append(
+                    ValidationError(
+                        field=f"network.rules[{i}].action",
+                        message=f"Rule '{name}' has no action",
+                        severity="error",
+                    )
+                )
+            elif action not in self.VALID_RULE_ACTIONS:
+                errors.append(
+                    ValidationError(
+                        field=f"network.rules[{i}].action",
+                        message=f"Rule '{name}' has invalid action {action!r}; "
+                                f"expected one of {sorted(self.VALID_RULE_ACTIONS)}",
+                        severity="error",
+                    )
+                )
+
+            if not rule.get("protocol"):
+                warnings.append(
+                    ValidationError(
+                        field=f"network.rules[{i}].protocol",
+                        message=f"Rule '{name}' does not specify a protocol",
+                        severity="warning",
                     )
                 )
 
@@ -337,8 +521,18 @@ class ValidationHandler:
 
     def _generate_recommendations(self, config: dict, recommendations: list[str]) -> None:
         """Generate general recommendations."""
+        # "ludus" is a list of VMs in the real Ludus config format and a dict
+        # with a "vms" key in the alternative format - the same two shapes
+        # validate_config() handles above. Assuming a dict here crashed on
+        # every genuine range config.
         ludus_config = config.get("ludus", {})
-        vms = ludus_config.get("vms", [])
+        if isinstance(ludus_config, list):
+            vms = ludus_config
+        elif isinstance(ludus_config, dict):
+            vms = ludus_config.get("vms", [])
+        else:
+            vms = []
+        vms = [vm for vm in vms if isinstance(vm, dict)]
 
         # Check for SIEM
         has_siem = any("siem" in vm.get("role", "").lower() or "wazuh" in vm.get("hostname", "").lower() for vm in vms)

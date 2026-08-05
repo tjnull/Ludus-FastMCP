@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ludus-fastmcp"
-version = "1.0.0"
-description = "FastMCP 2.0 server for Ludus cyber range automation with AI integration - 157 tools for custom templates, range management, and more"
+version = "2.0.0"
+description = "FastMCP server for Ludus cyber range automation with AI integration - tools for custom templates, range management, and more"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -27,8 +27,10 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.0.0",
-    "fastmcp>=2.2.0",
+    # mcp is pulled in by fastmcp; keep the range aligned with what fastmcp
+    # supports (mcp<2.0) so a fresh install cannot resolve to an incompatible one
+    "mcp>=1.24.0,<2.0.0",
+    "fastmcp>=3.0.0,<4.0.0",
     "httpx>=0.27.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",

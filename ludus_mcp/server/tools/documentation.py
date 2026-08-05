@@ -24,7 +24,6 @@ def create_documentation_tools(client: LudusAPIClient) -> FastMCP:
     @mcp.tool()
     async def generate_range_documentation(
         format: str = "markdown",
-        include_network_diagram: bool = True,
         include_credentials: bool = False,
         user_id: str | None = None
     ) -> dict:
@@ -32,16 +31,15 @@ def create_documentation_tools(client: LudusAPIClient) -> FastMCP:
 
         Args:
             format: Documentation format (markdown, html, pdf)
-            include_network_diagram: Include network topology diagram
             include_credentials: Include credentials in documentation
             user_id: Optional user ID (admin only)
 
         Returns:
-            Documentation content or download link
+            Documentation content
         """
         handler = registry.get_handler("documentation", DocumentationHandler)
         result = await handler.generate_range_documentation(
-            format, include_network_diagram, include_credentials, user_id
+            format=format, include_credentials=include_credentials, user_id=user_id
         )
         return format_tool_response(result)
 
@@ -50,14 +48,19 @@ def create_documentation_tools(client: LudusAPIClient) -> FastMCP:
         scenario_key: str | None = None,
         user_id: str | None = None
     ) -> dict:
-        """Generate attack path documentation for a scenario.
+        """Generate attack path documentation for an attack technique.
+
+        Note that scenario_key names an attack technique ("kerberoasting",
+        "golden-ticket"), not a range scenario like "redteam-lab-lite". There is
+        no default: omitting it returns the list of techniques available.
 
         Args:
-            scenario_key: Optional scenario key (defaults to current deployment)
+            scenario_key: Attack technique to document
             user_id: Optional user ID (admin only)
 
         Returns:
-            Attack path documentation with techniques and mitigations
+            Attack path documentation with techniques and mitigations, or the
+            list of available techniques if scenario_key is missing or unknown
         """
         handler = registry.get_handler("documentation", DocumentationHandler)
         result = await handler.get_attack_path_documentation(scenario_key, user_id)
@@ -65,53 +68,47 @@ def create_documentation_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def export_lab_guide(
-        scenario_key: str | None = None,
-        format: str = "markdown",
-        include_solutions: bool = False,
+        title: str = "Lab Guide",
+        difficulty: str = "intermediate",
         user_id: str | None = None
     ) -> dict:
         """Export lab guide for training purposes.
 
+        The guide is generated from the current range deployment.
+
         Args:
-            scenario_key: Optional scenario key (defaults to current deployment)
-            format: Export format (markdown, html, pdf)
-            include_solutions: Include solution steps
+            title: Title for the generated lab guide
+            difficulty: Difficulty level (beginner, intermediate, advanced)
             user_id: Optional user ID (admin only)
 
         Returns:
-            Lab guide content or download link
+            Lab guide content
         """
         handler = registry.get_handler("documentation", DocumentationHandler)
         result = await handler.export_lab_guide(
-            scenario_key, format, include_solutions, user_id
+            title=title, difficulty=difficulty, user_id=user_id
         )
         return format_tool_response(result)
 
     @mcp.tool()
     async def create_scenario_playbook(
-        scenario_key: str,
-        title: str,
-        description: str,
-        objectives: list[str],
-        steps: list[dict[str, Any]],
+        scenario_name: str,
+        team: str = "red",
         user_id: str | None = None
     ) -> dict:
-        """Create a scenario playbook for training.
+        """Generate a red or blue team playbook for a scenario.
 
         Args:
-            scenario_key: Scenario identifier
-            title: Playbook title
-            description: Playbook description
-            objectives: Learning objectives
-            steps: List of playbook steps with instructions
+            scenario_name: Name of the scenario the playbook is for
+            team: Which team the playbook is written for (red, blue)
             user_id: Optional user ID (admin only)
 
         Returns:
-            Created playbook information
+            Generated playbook
         """
         handler = registry.get_handler("documentation", DocumentationHandler)
         result = await handler.create_scenario_playbook(
-            scenario_key, title, description, objectives, steps, user_id
+            scenario_name=scenario_name, team=team, user_id=user_id
         )
         return format_tool_response(result)
 

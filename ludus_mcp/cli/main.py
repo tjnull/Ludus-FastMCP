@@ -21,8 +21,8 @@ def cli(ctx, version):
     """Ludus FastMCP Client - AI-Powered Cyber Range Management
 
 \b
-Features (v1.0):
-  - 157 FastMCP tools across 15 modules
+Features:
+  - 231 FastMCP tools across 23 modules
   - Skeleton templates for VMs and ranges
   - Ansible Galaxy & custom role management
   - Enhanced AI-assisted range building
@@ -47,14 +47,14 @@ Maintenance:
 
 \b
 Direct Tools:
-  ludus-ai tool list-tools        # List all 157 FastMCP tools
+  ludus-ai tool list-tools        # List all 231 FastMCP tools
   ludus-ai tool list-ranges       # List all ranges with details
   ludus-ai tool get-inventory     # Get range inventory
   ludus-ai tool call-tool <name>  # Call any FastMCP tool directly
     """
     if version:
         click.echo("Ludus FastMCP Client v1.0")
-        click.echo("FastMCP Server: 157 tools")
+        click.echo("FastMCP Server: 231 tools")
         ctx.exit(0)
 
     # Store context for subcommands

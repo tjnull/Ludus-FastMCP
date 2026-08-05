@@ -78,15 +78,21 @@ def async_retry(
 
 
 class RetryContext:
-    """Context manager for retry operations with more control.
+    """Retry helper for code that cannot use the @async_retry decorator.
 
-    This provides an alternative to the decorator when you need
-    more fine-grained control over retry logic.
+    A context manager cannot re-run its own body, so this is used as an async
+    iterator that yields one attempt at a time:
 
-    Example:
-        retry = RetryContext(max_attempts=3)
-        async with retry:
-            result = await some_operation()
+        async for attempt in RetryContext(max_attempts=3, exceptions=(IOError,)):
+            with attempt:
+                result = await some_operation()
+
+    Each `with attempt:` block swallows a retryable error and schedules another
+    pass; the final failure propagates.
+
+    The previous `async with retry:` form was unusable and dangerous: __aexit__
+    returned True on failure, which SUPPRESSED the exception without re-running
+    anything, so a failed operation looked like a successful one.
     """
 
     def __init__(
@@ -104,37 +110,61 @@ class RetryContext:
         self.exceptions = exceptions
         self.attempt = 0
         self.last_exception: Exception | None = None
+        self._succeeded = False
 
-    async def __aenter__(self):
-        """Enter retry context."""
-        self.attempt += 1
+    def __aiter__(self):
+        self.attempt = 0
+        self._succeeded = False
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Exit retry context and handle retries."""
-        if exc_type is None:
-            return True
+    async def __anext__(self) -> "_RetryAttempt":
+        if self._succeeded or self.attempt >= self.max_attempts:
+            raise StopAsyncIteration
 
-        if not issubclass(exc_type, self.exceptions):
-            return False
-
-        self.last_exception = exc_val
-
-        if self.attempt >= self.max_attempts:
-            logger.error(
-                f"Operation failed after {self.max_attempts} attempts: {exc_val}"
+        if self.attempt:  # back off before every attempt after the first
+            delay = min(
+                self.initial_delay * (self.backoff_factor ** (self.attempt - 1)),
+                self.max_delay,
             )
+            logger.warning(
+                f"Attempt {self.attempt}/{self.max_attempts} failed: "
+                f"{self.last_exception}. Retrying in {delay:.1f}s..."
+            )
+            await asyncio.sleep(delay)
+
+        self.attempt += 1
+        return _RetryAttempt(self)
+
+    async def __aenter__(self):
+        raise TypeError(
+            "RetryContext cannot be used with 'async with' - a context manager "
+            "cannot re-run its own body, so failures were silently swallowed. "
+            "Use: async for attempt in RetryContext(...): with attempt: ..."
+        )
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):  # pragma: no cover
+        return False
+
+
+class _RetryAttempt:
+    """One attempt handed out by RetryContext; swallows retryable failures."""
+
+    def __init__(self, ctx: "RetryContext") -> None:
+        self._ctx = ctx
+
+    def __enter__(self) -> "_RetryAttempt":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if exc_type is None:
+            self._ctx._succeeded = True
             return False
-
-        delay = min(
-            self.initial_delay * (self.backoff_factor ** (self.attempt - 1)),
-            self.max_delay,
-        )
-
-        logger.warning(
-            f"Attempt {self.attempt}/{self.max_attempts} failed: "
-            f"{exc_type.__name__}: {exc_val}. Retrying in {delay:.1f}s..."
-        )
-
-        await asyncio.sleep(delay)
-        return True
+        if not issubclass(exc_type, self._ctx.exceptions):
+            return False
+        self._ctx.last_exception = exc_val
+        if self._ctx.attempt >= self._ctx.max_attempts:
+            logger.error(
+                f"Operation failed after {self._ctx.max_attempts} attempts: {exc_val}"
+            )
+            return False  # out of attempts: let the real error propagate
+        return True  # retryable and attempts remain: loop again

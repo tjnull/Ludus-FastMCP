@@ -2,6 +2,7 @@
 
 from fastmcp import FastMCP
 from ludus_mcp.core.client import LudusAPIClient
+from ludus_mcp.exceptions import LudusNotFoundError
 from ludus_mcp.server.handlers.diagnostics import DiagnosticsHandler
 from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_response
 from ludus_mcp.utils.version_guard import require_v2
@@ -28,7 +29,7 @@ def create_diagnostics_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             System diagnostics information
         """
-        guard = require_v2(client, "Diagnostics")
+        guard = await require_v2(client, "Diagnostics")
         if guard:
             return guard
         handler = registry.get_handler("diagnostics", DiagnosticsHandler)
@@ -42,7 +43,7 @@ def create_diagnostics_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Current user information
         """
-        guard = require_v2(client, "Diagnostics")
+        guard = await require_v2(client, "Diagnostics")
         if guard:
             return guard
         handler = registry.get_handler("diagnostics", DiagnosticsHandler)
@@ -56,7 +57,7 @@ def create_diagnostics_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             License information
         """
-        guard = require_v2(client, "Diagnostics")
+        guard = await require_v2(client, "Diagnostics")
         if guard:
             return guard
         handler = registry.get_handler("diagnostics", DiagnosticsHandler)
@@ -72,7 +73,7 @@ def create_diagnostics_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Migration result
         """
-        guard = require_v2(client, "Migration")
+        guard = await require_v2(client, "Migration")
         if guard:
             return guard
         handler = registry.get_handler("diagnostics", DiagnosticsHandler)
@@ -86,7 +87,7 @@ def create_diagnostics_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             SDN migration status information
         """
-        guard = require_v2(client, "Migration")
+        guard = await require_v2(client, "Migration")
         if guard:
             return guard
         handler = registry.get_handler("diagnostics", DiagnosticsHandler)
@@ -100,7 +101,7 @@ def create_diagnostics_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             SDN migration result
         """
-        guard = require_v2(client, "Migration")
+        guard = await require_v2(client, "Migration")
         if guard:
             return guard
         handler = registry.get_handler("diagnostics", DiagnosticsHandler)
@@ -114,11 +115,49 @@ def create_diagnostics_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             SDN setup result
         """
-        guard = require_v2(client, "Migration")
+        guard = await require_v2(client, "Migration")
         if guard:
             return guard
         handler = registry.get_handler("diagnostics", DiagnosticsHandler)
         result = await handler.setup_sdn()
         return format_tool_response(result)
+
+    @mcp.tool()
+    async def get_server_openapi_spec() -> dict:
+        """Fetch the Ludus server's own OpenAPI specification.
+
+        Use this to discover what this particular server actually implements,
+        rather than assuming every documented endpoint exists. Ludus serves
+        several features (quotas, auto-shutdown) from optional plugins that may
+        not be loaded, and the published docs cover a superset of any one build.
+
+        Returns:
+            The raw spec, or an explanation if this server does not serve one
+        """
+        guard = await require_v2(client, "OpenAPI spec")
+        if guard:
+            return guard
+        try:
+            result = await client.get_openapi_spec()
+        except LudusNotFoundError as e:
+            return {
+                "available": False,
+                "error": "This Ludus server does not expose its OpenAPI spec.",
+                "detail": str(e),
+                "hint": (
+                    "The published spec is served by the web UI at "
+                    "/ludus/api/ludus.openapi.yaml, but it describes the documented "
+                    "API rather than this server's loaded plugin set."
+                ),
+            }
+        content = result.get("content", b"") if isinstance(result, dict) else b""
+        return format_tool_response(
+            {
+                "available": True,
+                "content_type": result.get("content_type") if isinstance(result, dict) else None,
+                "size_bytes": len(content),
+                "spec": content.decode("utf-8", errors="replace"),
+            }
+        )
 
     return mcp

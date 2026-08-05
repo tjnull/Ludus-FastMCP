@@ -70,8 +70,13 @@ class CollaborationHandler:
                     "base64": config_base64
                 },
                 "metadata": {
-                    "vm_count": len(shared_config.get("ludus", {}).get("vms", [])),
-                    "network_count": len(shared_config.get("ludus", {}).get("network", [])),
+                    # "ludus" is a LIST of VMs and "network" is a top-level
+                    # block; treating ludus as a dict raised
+                    # "'list' object has no attribute 'get'" on every call.
+                    "vm_count": len(shared_config.get("ludus") or []),
+                    "network_count": len(
+                        (shared_config.get("network") or {}).get("rules", [])
+                    ),
                     "size_bytes": len(config_json)
                 },
                 "usage_instructions": {

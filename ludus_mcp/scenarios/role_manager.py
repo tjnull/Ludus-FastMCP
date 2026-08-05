@@ -687,14 +687,51 @@ class RoleManager:
             f"Last error: {last_error}"
         )
 
+    @staticmethod
+    def roles_in_config(config: dict[str, Any] | None) -> list[str]:
+        """Extract every Ansible role named by a scenario/range config.
+
+        The authoritative list of what a scenario needs is the config itself.
+        Deriving it from the scenario key alone missed roles entirely - the
+        wireless lab needs ludus.docker, which no key-prefix rule mentioned, so
+        deployment failed with "the role 'ludus.docker' does not exist".
+        """
+        if not isinstance(config, dict):
+            return []
+        vms = config.get("ludus", [])
+        if isinstance(vms, dict):
+            vms = vms.get("vms", [])
+        found: list[str] = []
+        for vm in vms if isinstance(vms, list) else []:
+            if not isinstance(vm, dict):
+                continue
+            for role in vm.get("roles", []) or []:
+                if isinstance(role, str):
+                    found.append(role)
+                elif isinstance(role, dict) and role.get("name"):
+                    found.append(role["name"])
+        return found
+
     async def ensure_roles_for_scenario(
-        self, scenario_key: str, auto_install: bool = True, siem_type: str = "wazuh"
+        self,
+        scenario_key: str,
+        auto_install: bool = True,
+        siem_type: str = "wazuh",
+        config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Ensure required roles are installed for a scenario."""
+        """Ensure required roles are installed for a scenario.
+
+        Args:
+            scenario_key: Scenario identifier
+            auto_install: Install anything missing
+            siem_type: SIEM flavour, which pulls in its own roles
+            config: The scenario's built config. When given, roles are read from
+                it directly - far more reliable than inferring from the key.
+        """
         logger.info(f"Checking roles for scenario: {scenario_key} with SIEM: {siem_type}")
-        
-        # Determine required roles based on scenario type
-        required_roles = []
+
+        # Roles named by the config always count, whatever the key looks like
+        required_roles = list(self.roles_in_config(config))
         if scenario_key.startswith("goad"):
             required_roles.extend(self.REQUIRED_ROLES.get("goad", []))
         elif (scenario_key.startswith("ad-") or 
@@ -717,7 +754,7 @@ class RoleManager:
                 required_roles.extend(self.REQUIRED_ROLES.get("sql", []))
         if scenario_key.startswith("web-") or scenario_key in ["dvwa", "owasp-top10"]:
             required_roles.extend(self.REQUIRED_ROLES.get("web", []))
-        if scenario_key.startswith("network-") or scenario_key == "wireless":
+        if scenario_key.startswith("network-") or scenario_key.startswith("wireless"):
             required_roles.extend(self.REQUIRED_ROLES.get("network", []))
         if scenario_key.startswith("purple-") or scenario_key == "red-vs-blue":
             required_roles.extend(self.REQUIRED_ROLES.get("purple-team", []))

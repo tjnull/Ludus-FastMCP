@@ -7,8 +7,6 @@ from ludus_mcp.server.handlers.ranges import RangeHandler
 from ludus_mcp.server.handlers.power import PowerHandler
 from ludus_mcp.server.handlers.snapshots import SnapshotHandler
 from ludus_mcp.server.handlers.templates import TemplateHandler
-from ludus_mcp.server.handlers.hosts import HostHandler
-from ludus_mcp.server.handlers.networks import NetworkHandler
 from ludus_mcp.server.handlers.testing import TestingHandler
 from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_response
 
@@ -312,15 +310,16 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def snapshot_host(
-        vm_name: str,
-        name: str,
+        vm_name: str | list[str] | None = None,
+        name: str = "snapshot",
         description: str | None = None,
         user_id: str | None = None
     ) -> dict:
-        """Create a snapshot of a host.
+        """Create a snapshot of one or more VMs in the range.
 
         Args:
-            vm_name: Name of the VM to snapshot
+            vm_name: VM name, list of VM names, or omit to snapshot every VM
+                in the range
             name: Name of the snapshot
             description: Optional snapshot description
             user_id: Optional user ID (admin only)
@@ -328,8 +327,15 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Snapshot creation result
         """
+        # The API selects VMs by numeric "vmids"; a name field it does not
+        # understand is ignored and every VM gets snapshotted instead.
+        vmids = await client.resolve_vm_ids(vm_name, user_id)
+        snapshot_config: dict[str, Any] = {"name": name}
+        if description:
+            snapshot_config["description"] = description
+        if vmids:
+            snapshot_config["vmids"] = vmids
         handler = registry.get_handler("snapshot", SnapshotHandler)
-        snapshot_config = {"vm_name": vm_name, "name": name, "description": description}
         result = await handler.create_snapshot(snapshot_config, user_id)
         return format_tool_response(result)
 
@@ -349,42 +355,52 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def rollback_snapshot(
-        vm_name: str,
         snapshot_name: str,
+        vm_name: str | list[str] | None = None,
         user_id: str | None = None
     ) -> dict:
-        """Rollback to a snapshot.
+        """Roll one or more VMs back to a snapshot.
 
         Args:
-            vm_name: Name of the VM
-            snapshot_name: Name of the snapshot to rollback to
+            snapshot_name: Name of the snapshot to roll back to
+            vm_name: VM name, list of VM names, or omit to roll back every VM
+                in the range
             user_id: Optional user ID (admin only)
 
         Returns:
             Rollback result
         """
+        vmids = await client.resolve_vm_ids(vm_name, user_id)
+        config: dict[str, Any] = {"name": snapshot_name}
+        if vmids:
+            config["vmids"] = vmids
         handler = registry.get_handler("snapshot", SnapshotHandler)
-        result = await handler.rollback_snapshot({"vm_name": vm_name, "name": snapshot_name}, user_id)
+        result = await handler.rollback_snapshot(config, user_id)
         return format_tool_response(result)
 
     @mcp.tool()
     async def remove_snapshot(
-        vm_name: str,
         snapshot_name: str,
+        vm_name: str | list[str] | None = None,
         user_id: str | None = None
     ) -> dict:
-        """Remove a snapshot.
+        """Delete a snapshot from one or more VMs.
 
         Args:
-            vm_name: Name of the VM
-            snapshot_name: Name of the snapshot to remove
+            snapshot_name: Name of the snapshot to delete
+            vm_name: VM name, list of VM names, or omit to delete it from every
+                VM in the range
             user_id: Optional user ID (admin only)
 
         Returns:
             Removal result
         """
+        vmids = await client.resolve_vm_ids(vm_name, user_id)
+        config: dict[str, Any] = {"name": snapshot_name}
+        if vmids:
+            config["vmids"] = vmids
         handler = registry.get_handler("snapshot", SnapshotHandler)
-        result = await handler.remove_snapshot({"vm_name": vm_name, "name": snapshot_name}, user_id)
+        result = await handler.remove_snapshot(config, user_id)
         return format_tool_response(result)
 
     # ==================== POWER TOOLS ====================
@@ -455,19 +471,47 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def list_networks(user_id: str | None = None) -> list[dict]:
-        """List all networks in a range.
+        """List the networks (VLANs) in a range.
+
+        Ludus has no network objects to query -- networks exist implicitly as
+        the distinct VLANs its VMs are assigned to, so they are derived from the
+        range configuration. GET /range carries no network data at all, so
+        reading it there always yields an empty list.
 
         Args:
             user_id: Optional user ID (admin only)
 
         Returns:
-            List of networks
+            One entry per VLAN, with its subnet and members
         """
         handler = registry.get_handler("range", RangeHandler)
-        # Get range first to extract networks
-        range_info = await handler.client.get_range(user_id)
-        networks = range_info.get("networks", [])
-        return networks
+        config = await handler.client.get_range_config(user_id)
+
+        vms = config.get("ludus", []) if isinstance(config, dict) else []
+        if not isinstance(vms, list):
+            vms = []
+
+        members: dict[Any, list[str]] = {}
+        for vm in vms:
+            if not isinstance(vm, dict):
+                continue
+            vlan = vm.get("vlan")
+            if vlan is None:
+                continue
+            members.setdefault(vlan, []).append(
+                vm.get("vm_name") or vm.get("hostname") or "unnamed"
+            )
+
+        return [
+            {
+                "name": f"VLAN {vlan}",
+                "vlan": vlan,
+                "subnet": f"10.{{{{ range_second_octet }}}}.{vlan}.0/24",
+                "vm_count": len(members[vlan]),
+                "vms": sorted(members[vlan]),
+            }
+            for vlan in sorted(members, key=lambda v: (v is None, v))
+        ]
 
     # ==================== TESTING TOOLS ====================
 
@@ -499,6 +543,92 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
         result = await handler.stop_testing(user_id)
         return result
 
+    @mcp.tool()
+    async def allow_testing_domains(
+        domains: list[str] | None = None,
+        ips: list[str] | None = None,
+        user_id: str | None = None
+    ) -> dict:
+        """Allow specific domains or IPs while the range is in testing mode.
+
+        Testing mode blocks a VM's internet access so detonations stay
+        contained; this punches controlled holes in that block, e.g. to let
+        malware reach one C2 domain while everything else stays denied.
+
+        Args:
+            domains: Domain names to allow (e.g. ["example.com"])
+            ips: IP addresses or CIDRs to allow
+            user_id: Optional user ID (admin only)
+
+        Returns:
+            Updated testing allow-list result
+        """
+        payload: dict[str, Any] = {}
+        if domains:
+            payload["domains"] = domains
+        if ips:
+            payload["ips"] = ips
+        if not payload:
+            return {
+                "status": "error",
+                "error": "Specify at least one domain or IP to allow.",
+            }
+        handler = registry.get_handler("testing", TestingHandler)
+        result = await handler.allow_testing(payload, user_id)
+        return format_tool_response(result)
+
+    @mcp.tool()
+    async def deny_testing_domains(
+        domains: list[str] | None = None,
+        ips: list[str] | None = None,
+        user_id: str | None = None
+    ) -> dict:
+        """Re-block domains or IPs that were previously allowed in testing mode.
+
+        Args:
+            domains: Domain names to deny again
+            ips: IP addresses or CIDRs to deny again
+            user_id: Optional user ID (admin only)
+
+        Returns:
+            Updated testing deny result
+        """
+        payload: dict[str, Any] = {}
+        if domains:
+            payload["domains"] = domains
+        if ips:
+            payload["ips"] = ips
+        if not payload:
+            return {
+                "status": "error",
+                "error": "Specify at least one domain or IP to deny.",
+            }
+        handler = registry.get_handler("testing", TestingHandler)
+        result = await handler.deny_testing(payload, user_id)
+        return format_tool_response(result)
+
+    @mcp.tool()
+    async def update_testing_vm(
+        name: str,
+        user_id: str | None = None
+    ) -> dict:
+        """Re-run Ansible against a VM or group.
+
+        Testing mode must be STOPPED first: while a test is in progress Ludus
+        rejects this with HTTP 409 "Testing is enabled; stop testing to update
+        VMs". Call stop_testing before this.
+
+        Args:
+            name: VM name or group to update
+            user_id: Optional user ID (admin only)
+
+        Returns:
+            Update result
+        """
+        handler = registry.get_handler("testing", TestingHandler)
+        result = await handler.update_testing({"name": name}, user_id)
+        return format_tool_response(result)
+
     # ==================== HEALTH CHECK TOOL ====================
 
     @mcp.tool()
@@ -529,7 +659,7 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
         try:
             actual_version = version("ludus-fastmcp")
         except Exception:
-            actual_version = "1.0.0"  # Fallback version
+            actual_version = "2.0.0"  # Fallback when the package is not installed
 
         # Get current settings for debug info
         settings = get_settings()
@@ -546,7 +676,9 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
         health_info = {
             "status": "unknown",
             "mcp_version": actual_version,
-            "tools_available": 157,
+            # Counted live: every tool module mounts into this server, so this
+            # stays correct as modules are added rather than drifting.
+            "tools_available": len({tool.name for tool in await mcp.list_tools()}),
             "timestamp": time.time(),
             "config": {
                 "api_url": settings.ludus_api_url,
@@ -577,9 +709,12 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
                 latency_ms = round((time.time() - start_time) * 1000, 2)
 
                 output = (result.stdout + result.stderr).strip()
-                # Parse versions from output
-                # Example: "[INFO]  Ludus client 1.11.5+b9fe95c"
-                #          "[INFO]  Ludus Server 1.11.4+b1da5c6 - community license"
+                # Parse versions from output. Observed with ludus client 2.3.1:
+                #   "[INFO]  Ludus client 2.3.1+f8d0295c"
+                #   "[INFO]  Ludus Server 2.3.0+02a3ffc8 - License active, expires: ..."
+                #   "[INFO]  Ludus Server 1.11.4+b1da5c6 - community license"
+                # Failures omit the "Ludus Server" line and report the reason on
+                # [ERROR] lines, a [FATAL] line, or both.
                 server_version = None
                 client_version = None
                 license_type = None
@@ -589,16 +724,17 @@ def create_core_tools(client: LudusAPIClient) -> FastMCP:
                         parts = line.split('Ludus Server')[-1].strip()
                         server_version = parts.split()[0] if parts else None
                         if ' - ' in parts:
-                            license_type = parts.split(' - ')[-1].strip()
+                            # Everything after the version is the license blurb;
+                            # it can itself contain " - " (seat and expiry detail).
+                            license_type = parts.split(' - ', 1)[1].strip()
                     elif 'Ludus client' in line:
                         client_version = line.split('Ludus client')[-1].strip()
-                    elif '[ERROR]' in line:
-                        error_lines.append(line.split('[ERROR]', 1)[-1].strip())
+                    elif '[ERROR]' in line or '[FATAL]' in line:
+                        marker = '[ERROR]' if '[ERROR]' in line else '[FATAL]'
+                        error_lines.append(line.split(marker, 1)[-1].strip())
 
-                # `ludus version` still prints the client version and exits 0
-                # when it cannot reach the server - it just emits [ERROR] lines
-                # and omits "Ludus Server ...". A parsed server version is the
-                # reliable signal that the API was actually reached.
+                # Don't trust the exit code alone - a parsed server version is
+                # the signal that the API was actually reached.
                 if result.returncode == 0 and server_version:
                     health_info.update({
                         "status": "healthy",

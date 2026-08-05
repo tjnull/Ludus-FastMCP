@@ -120,8 +120,18 @@ class SecurityComplianceHandler:
                 })
                 if not has_snapshots:
                     compliance_results["compliant"] = False
-            except Exception:
-                pass
+            except Exception as e:
+                # Swallowing this used to drop the control from the report and
+                # leave "compliant": True - claiming compliance for a check that
+                # never ran. An unverifiable control is reported, not assumed.
+                logger.warning(f"Snapshot compliance check failed: {e}")
+                compliance_results["checks"].append({
+                    "control": "BACKUP-001",
+                    "description": "Regular snapshots exist",
+                    "status": "unknown",
+                    "error": str(e),
+                })
+                compliance_results["compliant"] = False
 
             return {
                 "status": "success",
@@ -156,10 +166,20 @@ class SecurityComplianceHandler:
                     "note": "Apply using Ansible playbook: ansible.builtin.user module"
                 })
 
+            # NOTHING is applied here: this only generates candidate passwords.
+            # Reporting "success" made callers believe the range had been
+            # rotated when no machine was touched - a dangerous thing to get
+            # wrong in a security tool.
             return {
-                "status": "success",
+                "status": "advisory",
+                "applied": False,
+                "warning": (
+                    "No credentials were changed. These are SUGGESTED passwords; "
+                    "apply them yourself with the guidance below."
+                ),
                 "timestamp": datetime.now().isoformat(),
-                "rotations": rotations,
+                "suggested_credentials": rotations,
+                "rotations": rotations,  # kept for backwards compatibility
                 "vm_count": len(rotations),
                 "implementation_guide": {
                     "ansible_playbook": "Use ansible.builtin.user with update_password: always",

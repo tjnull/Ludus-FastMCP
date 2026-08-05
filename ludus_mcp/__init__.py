@@ -10,7 +10,7 @@ Package Structure:
 - ui: User interface layers (web, GUI, chat)
 """
 
-__version__ = "0.2.0"
+__version__ = "2.0.0"
 
 from .core.client import LudusAPIClient
 from .mcp_client.connection_manager import MCPConnectionManager

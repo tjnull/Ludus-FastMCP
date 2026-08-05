@@ -259,16 +259,23 @@ def create_deployment_tools(client: LudusAPIClient) -> FastMCP:
         return result
 
     @mcp.tool()
-    async def get_range_logs(user_id: str | None = None) -> str:
+    async def get_range_logs(
+        tail: int | None = 200,
+        user_id: str | None = None
+    ) -> str:
         """Get deployment logs for the range.
 
+        Deployment logs run to tens of thousands of lines, so this returns the
+        last 200 by default. Pass tail=None for the whole log.
+
         Args:
+            tail: Return only the last N lines (default 200)
             user_id: Optional user ID (admin only)
 
         Returns:
             Deployment logs
         """
-        result = await client.get_range_logs(user_id)
+        result = await client.get_range_logs(user_id=user_id, tail=tail)
         return result
 
     # ==================== ORCHESTRATION TOOLS ====================
@@ -359,8 +366,8 @@ def create_deployment_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Timeline with steps and progress
         """
-        handler = registry.get_handler("orchestrator", DeploymentOrchestrator)
-        result = await handler.get_deployment_timeline(user_id)
+        handler = registry.get_handler("deployment", DeploymentHandler)
+        result = await handler.get_deployment_timeline(user_id=user_id)
         return format_tool_response(result)
 
     # ==================== VALIDATION TOOLS ====================

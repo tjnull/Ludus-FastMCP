@@ -191,6 +191,91 @@ def create_range_management_tools(client: LudusAPIClient) -> FastMCP:
     # ==================== SELECTIVE RANGE DELETION ====================
 
     @mcp.tool()
+    async def delete_range_object(
+        user_id: str,
+        range_id: str | None = None,
+        force: bool = False,
+        confirm: bool = False,
+    ) -> dict:
+        """Delete a range object entirely, removing its configuration too.
+
+        This is `ludus range rm-range`, a different operation from
+        delete_range_by_user, which is `ludus range rm`:
+
+        - delete_range_by_user destroys the VMs and KEEPS the range, so it can
+          be redeployed from the same configuration.
+        - delete_range_object removes the range itself. The configuration goes
+          with it. Use this when decommissioning a user or cleaning up after a
+          class, not to reset a lab.
+
+        The API refuses to delete a range that still has VMs unless force=True.
+
+        Args:
+            user_id: Owner of the range to delete
+            range_id: Range to delete. Defaults to the user's default range.
+            force: Also destroy any VMs still in the range
+            confirm: Must be True to actually delete (safety measure)
+
+        Returns:
+            Deletion result, or a preview when confirm is False
+        """
+        handler = registry.get_handler("range", RangeHandler)
+
+        try:
+            range_data = await handler.client.get_range(user_id)
+            vms = range_data.get("VMs", []) or []
+            vm_names = [vm.get("name") for vm in vms if isinstance(vm, dict)]
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Range for user '{user_id}' not found or error: {e}",
+            }
+
+        if not confirm:
+            return {
+                "status": "preview",
+                "message": "[WARNING] DELETION PREVIEW - Set confirm=True to delete",
+                "user_id": user_id,
+                "range_id": range_id or range_data.get("rangeID"),
+                "range_status": range_data.get("rangeState"),
+                "vm_count": len(vm_names),
+                "vm_names": vm_names,
+                "warning": (
+                    "This removes the RANGE OBJECT and its configuration, not just "
+                    "the VMs. To wipe VMs but keep the range, use delete_range_by_user."
+                ),
+                "force_required": bool(vm_names) and not force,
+                "next_step": (
+                    f"To delete, call: delete_range_object(user_id='{user_id}', "
+                    f"confirm=True{', force=True' if vm_names else ''})"
+                ),
+            }
+
+        if vm_names and not force:
+            return {
+                "status": "error",
+                "error": (
+                    f"Range for '{user_id}' still has {len(vm_names)} VM(s). "
+                    "The API will not delete a range that still has VMs."
+                ),
+                "hint": "Pass force=True to destroy them as part of the deletion.",
+                "vm_names": vm_names,
+            }
+
+        result = await handler.client.delete_range_object(
+            user_id=user_id, range_id=range_id, force=force
+        )
+        return format_tool_response(
+            {
+                "status": "deleted",
+                "user_id": user_id,
+                "range_id": range_id or range_data.get("rangeID"),
+                "vms_destroyed": len(vm_names) if force else 0,
+                "result": result,
+            }
+        )
+
+    @mcp.tool()
     async def delete_range_by_user(
         user_id: str,
         confirm: bool = False

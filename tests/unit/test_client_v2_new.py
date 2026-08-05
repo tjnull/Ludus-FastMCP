@@ -55,7 +55,7 @@ async def test_destroy_vm(v2_client):
 
 @pytest.mark.asyncio
 async def test_get_console_ticket(v2_client):
-    await v2_client.get_console_ticket(vm_id="vm-123")
+    await v2_client.get_console_ticket(vm_id="123")
     assert "/api/v2/vm/console/ticket" in v2_client.client.request.call_args.kwargs["url"]
 
 @pytest.mark.asyncio

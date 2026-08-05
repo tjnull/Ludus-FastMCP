@@ -4,390 +4,415 @@ Complete reference for all tools available in Ludus FastMCP, organized by catego
 
 ## Overview
 
-Ludus FastMCP provides tools across 20 modules. Tools marked with **(v2)** require a Ludus 2.0 server.
+Ludus FastMCP provides **231 tools** across 23 modules. Tools marked with require a Ludus 2.0 server. Together they cover every endpoint in the Ludus API.
 
 | Category | Tools | Description |
 |----------|-------|-------------|
-| Core Operations | 16 | Range, snapshot, power, network, template management |
-| Deployment | 12 | Scenario deployment, orchestration, monitoring |
-| User Management | 5 | User accounts, API keys, access control |
-| Security Integration | 16 | SIEM configuration, compliance, vulnerability |
-| Templates Advanced | 13 | Template discovery, creation, building |
-| Metrics and Monitoring | 17 | Performance, health checks, inventory |
-| Automation | 11 | Pipelines, scheduling, bulk operations |
-| Integrations | 4 | Webhooks, Slack, Jira, Git |
-| Documentation | 4 | Lab guides, attack paths, playbooks |
-| Collaboration | 11 | Sharing, resources, community |
+| Core Operations | 21 | Range, snapshot, power, network, template management |
+| Blueprints | 19 | Blueprint lifecycle, export/import, sharing, access control |
 | Custom Builder | 18 | Skeleton templates, custom OS/containers |
-| Range Management | 6 | List, search, delete, cleanup |
-| AI Config Generation | 8 | Natural language to YAML |
-| Profile Transformation | 5 | Adversary/defender profiles |
+| Templates Advanced | 18 | Template discovery, upload, building, role scope |
+| Security Integration | 14 | SIEM configuration, compliance, access control |
+| Deployment | 13 | Scenario deployment, orchestration, monitoring |
+| Metrics and Monitoring | 13 | Performance, health checks, inventory |
+| Quotas & Limits | 12 | Quotas, auto-shutdown, deployment log history |
+| Content Sources | 12 | Git/archive catalogs of templates, roles, blueprints |
+| Automation | 11 | Pipelines, scheduling, bulk operations |
 | Role Management | 11 | Ansible Galaxy, custom roles |
-| Blueprints **(v2)** | ~13 | Blueprint lifecycle, sharing, access control |
-| Groups **(v2)** | ~9 | Group management, membership, range access |
-| VM Management **(v2)** | ~2 | VM destruction, console tickets |
-| Diagnostics & Migration **(v2)** | ~7 | Diagnostics, license, SQLite/SDN migration |
-| Enhanced Range Management **(v2)** | ~7 | Range creation, user assignment, defaults |
+| Groups | 9 | Group management, membership, range access |
+| Diagnostics & Migration | 8 | Diagnostics, license, OpenAPI, SQLite/SDN migration |
+| Collaboration | 7 | Sharing, resources, community |
+| Enhanced Range Management | 7 | Range creation, user assignment, defaults |
+| User Management | 7 | User accounts, API keys, credentials |
+| Batch Operations | 6 | Bulk snapshot, power, and status operations |
+| Range Management | 7 | List, search, delete, cleanup |
+| Documentation | 4 | Lab guides, attack paths, playbooks |
+| Integrations | 4 | Webhooks, Slack, Jira, Git |
+| Profile Transformation | 4 | Adversary/defender profiles |
+| AI Config Generation | 3 | Natural language to YAML |
+| VM Management | 3 | VM destruction, console tickets and URLs |
 
-## Core Operations
+## Tool Categories
 
-Tools for managing ranges, snapshots, power states, hosts, networks, and templates.
+Every tool below is registered by the server; the tables are generated from the
+source so they cannot drift out of sync with what is actually available.
+
+### Core Operations
+
+| Tool | Description |
+|------|-------------|
+| `get_range` | Get current user's range information. |
+| `get_range_config` | Get range configuration. |
+| `update_range_config` | Update range configuration. |
+| `deploy_range` | Deploy a range from configuration with optional filters for resuming. |
+| `get_range_tags` | Get available Ansible tags for the current range. |
+| `abort_range_deployment` | Abort a range deployment. |
+| `snapshot_host` | Create a snapshot of one or more VMs in the range. |
+| `list_snapshots` | List all snapshots for the range. |
+| `rollback_snapshot` | Roll one or more VMs back to a snapshot. |
+| `remove_snapshot` | Delete a snapshot from one or more VMs. |
+| `power_on_range` | Power on all VMs in the range. |
+| `power_off_range` | Power off all VMs in the range. |
+| `list_templates` | List available templates. |
+| `list_hosts` | List all hosts in range. |
+| `list_networks` | List the networks (VLANs) in a range. |
+| `start_testing` | Start testing state for the range. |
+| `stop_testing` | Stop testing state for the range. |
+| `allow_testing_domains` | Allow specific domains or IPs while the range is in testing mode. |
+| `deny_testing_domains` | Re-block domains or IPs that were previously allowed in testing mode. |
+| `update_testing_vm` | Re-run Ansible against a VM or group. |
+| `health_check` | Check health of Ludus MCP server and Ludus API connectivity. |
+
+### Deployment and Scenarios
+
+| Tool | Description |
+|------|-------------|
+| `list_scenarios` | List all available scenarios. |
+| `deploy_scenario` | Deploy a scenario with optional SIEM integration and customization. |
+| `get_scenario_config` | Get scenario configuration. |
+| `get_scenario_yaml` | Get scenario configuration as YAML. |
+| `preview_scenario` | Preview a scenario before deployment with detailed information. |
+| `quick_status` | Get one-line deployment status with emoji indicators. |
+| `get_deployment_status` | Get current deployment status with detailed information. |
+| `get_range_logs` | Get deployment logs for the range. |
+| `smart_deploy` | Smart deployment with validation, optional snapshot, and auto-monitoring. |
+| `monitor_deployment` | Monitor deployment progress with periodic updates. |
+| `deployment_timeline` | Get deployment timeline with progress tracking. |
+| `validate_config` | Validate range configuration before deployment. |
+| `handle_adws_recovery` | Handle Active Directory Web Services (ADWS) recovery for stuck deployments. |
 
 ### Range Management
 
 | Tool | Description |
 |------|-------------|
-| `get_range` | Get current range information and status |
-| `get_range_config` | Retrieve range configuration |
-| `update_range_config` | Update range configuration |
-| `deploy_range` | Deploy a range from configuration |
-| `abort_range_deployment` | Stop an active deployment |
-| `get_range_tags` | List available Ansible tags for deployment |
-| `get_range_logs` | Retrieve deployment logs |
-| `get_range_etchosts` | Get /etc/hosts file content |
-| `get_range_sshconfig` | Get SSH configuration for range VMs |
-| `get_range_rdpconfigs` | Get RDP configurations |
-| `get_range_ansible_inventory` | Get Ansible inventory |
+| `list_all_ranges_detailed` | List all ranges with detailed information including identification. |
+| `get_range_by_user` | Get detailed information about a specific user's range. |
+| `find_range_by_vm_name` | Find which range contains a specific VM by name. |
+| `delete_range_by_user` | Delete a specific user's range (requires confirmation). |
+| `delete_ranges_by_status` | Delete all ranges matching a specific status (requires confirmation). |
+| `delete_range_object` | Delete a range object entirely, removing its configuration too. |
+| `cleanup_old_ranges` | Delete all ranges EXCEPT those belonging to specified users. |
 
-### Snapshot Operations
+`delete_range_by_user` is `ludus range rm`: it destroys the VMs and keeps the
+range, so it can be redeployed from the same configuration.
+`delete_range_object` is `ludus range rm-range`: it removes the range itself,
+configuration included. Reach for the first to reset a lab and the second to
+decommission one.
 
-| Tool | Description |
-|------|-------------|
-| `snapshot_host` | Create a snapshot of a VM |
-| `list_snapshots` | List all snapshots in the range |
-| `rollback_snapshot` | Restore a VM to a snapshot |
-| `remove_snapshot` | Delete a snapshot |
-
-### Power Control
+### Enhanced Range Management
 
 | Tool | Description |
 |------|-------------|
-| `power_on_range` | Power on all VMs in the range |
-| `power_off_range` | Power off all VMs in the range |
+| `create_new_range` | Create a new range. |
+| `assign_range_to_user` | Assign range access to a user. |
+| `revoke_range_from_user` | Revoke range access from a user. |
+| `list_range_users` | List users with access to a range. |
+| `list_accessible_ranges` | List ranges accessible to current user. |
+| `get_default_range` | Get user's default range ID. |
+| `set_default_range` | Set user's default range. |
 
-## Deployment and Scenarios
-
-Tools for deploying and managing pre-built scenarios.
-
-### Scenario Deployment
-
-| Tool | Description |
-|------|-------------|
-| `list_scenarios` | List available deployment scenarios |
-| `preview_scenario` | Preview scenario configuration before deployment |
-| `deploy_scenario` | Deploy a pre-built scenario |
-| `smart_deploy` | Intelligent deployment with validation |
-
-### Deployment Monitoring
+### User Management
 
 | Tool | Description |
 |------|-------------|
-| `get_deployment_status` | Check current deployment status |
-| `monitor_deployment` | Real-time deployment monitoring |
-| `get_deployment_timeline` | Get deployment timeline and stages |
-| `check_deployment_health` | Verify deployment health |
-
-### Orchestration
-
-| Tool | Description |
-|------|-------------|
-| `validate_config` | Validate range configuration |
-| `recover_deployment` | Attempt to recover failed deployment |
-
-## User Management
-
-Tools for managing users and access control.
-
-| Tool | Description |
-|------|-------------|
-| `list_users` | List all users (admin only) |
-| `get_user` | Get user information |
-| `add_user` | Create a new user (admin only) |
-| `remove_user` | Delete a user (admin only) |
-| `get_user_apikey` | Get or regenerate user API key |
-
-## Security and SIEM
-
-Tools for security monitoring and SIEM integration.
-
-### SIEM Integration
-
-| Tool | Description |
-|------|-------------|
-| `get_siem_info` | Get SIEM platform information |
-| `configure_wazuh` | Configure Wazuh integration |
-| `configure_splunk` | Configure Splunk integration |
-| `configure_elastic` | Configure Elastic Stack integration |
-| `configure_security_onion` | Configure Security Onion |
-| `get_siem_alerts` | Retrieve SIEM alerts |
-
-### Security Operations
-
-| Tool | Description |
-|------|-------------|
-| `run_security_audit` | Execute security audit |
-| `validate_compliance` | Check compliance against frameworks |
-| `run_vulnerability_scan` | Execute vulnerability assessment |
-| `get_detection_status` | Check detection tool status |
-
-## Templates Advanced
-
-Tools for advanced template management.
-
-| Tool | Description |
-|------|-------------|
-| `discover_templates` | Search for templates by criteria |
-| `get_template_info` | Get detailed template information |
-| `get_template_status` | Check template build status |
-| `get_template_logs` | Retrieve template operation logs |
-| `build_template` | Build a template |
-| `add_template` | Add a new template |
-| `delete_template` | Remove a template |
-| `abort_template_operation` | Cancel template operation |
-
-## Custom Builder
-
-Tools for creating custom templates, skeleton configurations, and ranges.
-
-### Skeleton Templates
-
-| Tool | Description |
-|------|-------------|
-| `list_vm_skeletons` | List available VM skeleton templates |
-| `get_vm_skeleton` | Get a specific VM skeleton configuration |
-| `list_range_skeletons` | List available range skeleton templates |
-| `get_range_skeleton` | Get a complete range skeleton |
-| `list_yaml_examples` | List available YAML configuration examples |
-| `get_yaml_example` | Get a specific YAML example |
-| `generate_range_yaml` | Generate range YAML from skeleton |
-| `customize_skeleton` | Customize a skeleton template |
-
-### Custom Templates
-
-| Tool | Description |
-|------|-------------|
-| `create_custom_template` | Create custom OS template with packages |
-| `create_container_template` | Create container-based template |
-| `get_preconfigured_containers` | List available pre-configured containers |
-
-### Custom Ranges
-
-| Tool | Description |
-|------|-------------|
-| `build_custom_range` | Create range from scratch |
-| `clone_scenario_with_modifications` | Clone and modify existing scenario |
-| `export_range_config` | Export range configuration to YAML |
-
-## Range Management
-
-Tools for advanced range operations with safety features.
-
-| Tool | Description |
-|------|-------------|
-| `list_all_ranges` | List all ranges with details |
-| `list_ranges` | List ranges (simplified) |
-| `get_user_range` | Get specific user's range |
-| `find_range_by_vm` | Find range containing a specific VM |
-| `delete_range` | Delete a range (with safety confirmation) |
-| `delete_ranges_by_status` | Delete ranges by status (ERROR, FAILED) |
-
-## Role Management
-
-Tools for managing Ansible roles from Galaxy and custom repositories.
-
-### Role Operations
-
-| Tool | Description |
-|------|-------------|
-| `list_ansible_roles` | List installed Ansible roles |
-| `get_role_details` | Get detailed role information |
-| `install_ansible_role` | Install role via Ludus API |
-| `remove_ansible_role` | Remove an installed role |
-| `check_role_installed` | Check if a role is installed |
-
-### Galaxy Integration
-
-| Tool | Description |
-|------|-------------|
-| `install_galaxy_role` | Install role from Ansible Galaxy |
-| `install_role_from_url` | Install role from Git repository |
-| `get_common_galaxy_roles` | List commonly used Galaxy roles |
-| `list_role_repositories` | List available role repositories |
-| `get_roles_for_scenario` | Get recommended roles for a scenario |
-| `get_roles_for_vm` | Get recommended roles for a VM type |
-
-## AI Config Generation
-
-Tools for generating configurations using natural language.
-
-| Tool | Description |
-|------|-------------|
-| `generate_config_from_description` | Create config from natural language |
-| `suggest_scenario` | Suggest appropriate scenario for use case |
-| `optimize_config` | Optimize configuration for resources |
-| `validate_and_fix_config` | Validate and auto-fix configuration issues |
-
-## Profile Transformation
-
-Tools for applying adversary and defender profiles.
-
-| Tool | Description |
-|------|-------------|
-| `apply_redteam_profile` | Apply red team attack profile |
-| `apply_blueteam_profile` | Apply blue team defense profile |
-| `list_profiles` | List available profiles |
-| `validate_profile` | Validate profile configuration |
-| `get_profile_details` | Get detailed profile information |
-
-## Metrics and Monitoring
-
-Tools for performance and health monitoring.
-
-| Tool | Description |
-|------|-------------|
-| `get_performance_metrics` | Retrieve performance metrics |
-| `check_system_health` | Check overall system health |
-| `get_inventory` | Get infrastructure inventory |
-| `analyze_network_topology` | Analyze network configuration |
-| `get_connectivity_status` | Check VM connectivity |
-| `visualize_topology` | Generate network topology visualization |
-
-## Automation
-
-Tools for automation and bulk operations.
-
-| Tool | Description |
-|------|-------------|
-| `create_deployment_pipeline` | Create automated deployment pipeline |
-| `schedule_task` | Schedule a task for later execution |
-| `run_bulk_operation` | Execute operation on multiple targets |
-| `create_backup` | Create configuration backup |
-| `restore_backup` | Restore from backup |
-
-## Integrations
-
-Tools for external service integration.
-
-| Tool | Description |
-|------|-------------|
-| `configure_webhook` | Set up webhook notifications |
-| `send_slack_notification` | Send message to Slack |
-| `create_jira_ticket` | Create Jira ticket |
-| `sync_git_config` | Sync configuration with Git repository |
-
-## Documentation
-
-Tools for generating documentation.
-
-| Tool | Description |
-|------|-------------|
-| `generate_lab_guide` | Generate lab documentation |
-| `generate_attack_path` | Document attack paths |
-| `export_playbook` | Export as Ansible playbook |
-| `generate_yaml_documentation` | Generate YAML config documentation |
-
-## Collaboration
-
-Tools for sharing and collaboration.
-
-| Tool | Description |
-|------|-------------|
-| `share_range` | Share range with other users |
-| `publish_scenario` | Publish scenario to community |
-| `import_community_scenario` | Import community scenario |
-| `list_shared_resources` | List shared resources |
-
-## v2-Only Tools
-
-The following tool categories are available only when connected to a Ludus v2 server. They are always visible in the tool list, but calling them against a v1 server will return an error indicating that Ludus v2 is required.
-
-### Blueprints
-
-Tools for managing range blueprints (v2 only).
-
-| Tool | Description |
-|------|-------------|
-| `list_blueprints` | List all available blueprints |
-| `create_blueprint_from_range` | Create a blueprint from an existing range |
-| `apply_blueprint` | Apply a blueprint to create a new range |
-| `copy_blueprint` | Copy an existing blueprint |
-| `delete_blueprint` | Delete a blueprint |
-| `get_blueprint_config` | Get blueprint configuration details |
-| `update_blueprint_config` | Update blueprint configuration |
-| `share_blueprint_with_user` | Share a blueprint with a specific user |
-| `unshare_blueprint_with_user` | Revoke a user's access to a blueprint |
-| `share_blueprint_with_group` | Share a blueprint with a group |
-| `unshare_blueprint_with_group` | Revoke a group's access to a blueprint |
-| `list_blueprint_access` | List users and groups with access to a blueprint |
+| `list_users` | List all users in the Ludus system. |
+| `get_user` | Get information about a specific user. |
+| `add_user` | Add a new user to the Ludus system. |
+| `remove_user` | Remove a user from the Ludus system. |
+| `regenerate_user_apikey` | DESTRUCTIVE: issue a NEW API key for a user, invalidating the old one. |
+| `provision_oauth2_user` | Provision an OAuth2 user. |
+| `get_user_memberships` | Get current user's group memberships. |
 
 ### Groups
 
-Tools for managing user groups (v2 only).
+| Tool | Description |
+|------|-------------|
+| `list_groups` | List all groups. |
+| `create_group` | Create a new group. |
+| `delete_group` | Delete a group. |
+| `add_users_to_group` | Add users to a group. |
+| `remove_users_from_group` | Remove users from a group. |
+| `list_group_members` | List group members. |
+| `add_ranges_to_group` | Add ranges to a group. |
+| `remove_ranges_from_group` | Remove ranges from a group. |
+| `list_group_ranges` | List group ranges. |
+
+### Security and SIEM
 
 | Tool | Description |
 |------|-------------|
-| `list_groups` | List all groups |
-| `create_group` | Create a new group |
-| `delete_group` | Delete a group |
-| `add_user_to_group` | Add a user to a group |
-| `remove_user_from_group` | Remove a user from a group |
-| `list_group_members` | List members of a group |
-| `add_range_to_group` | Grant a group access to a range |
-| `remove_range_from_group` | Revoke a group's access to a range |
-| `list_group_ranges` | List ranges accessible by a group |
+| `get_siem_info` | Get SIEM information for the range. |
+| `get_siem_alerts` | Get SIEM alerts for the range. |
+| `get_siem_agents` | Get SIEM agents for the range. |
+| `get_detection_summary` | Get detection summary from SIEM. |
+| `get_wazuh_info` | Get Wazuh SIEM information for the range. |
+| `get_range_access` | Get range access information. |
+| `grant_range_access` | Grant other users access to your range. |
+| `revoke_range_access` | Revoke range access from a user. |
+| `clear_range_access` | Clear all range access permissions. |
+| `range_access_logs` | Get range access logs. |
+| `security_audit` | Run security audit on the range. |
+| `compliance_check` | Check compliance against security framework. |
+| `rotate_credentials` | Suggest new credentials for VMs in the range. DOES NOT APPLY THEM. |
+| `get_vulnerability_scan` | Get vulnerability scan results for the range. |
+
+### Templates Advanced
+
+| Tool | Description |
+|------|-------------|
+| `add_template` | Add a packer template to Ludus by uploading a local directory. |
+| `build_template` | Start a packer build for one or more VM templates. |
+| `delete_template` | Delete a template. |
+| `get_template_status` | Get the status of in-progress packer builds. |
+| `get_template_logs` | Get the latest packer build logs. |
+| `abort_template_build` | Abort the running packer build(s). |
+| `create_custom_template` | Create a custom template from scratch. |
+| `create_container_template` | Create a container-based template. |
+| `list_common_containers` | List common container base images. |
+| `get_container_config` | Get configuration for a common container. |
+| `template_diff` | Compare two templates and show differences. |
+| `validate_template` | Validate a template configuration. |
+| `get_template_dependencies` | Get template dependencies. |
+| `optimize_template` | Optimize a template for better performance. |
+| `move_ansible_role_scope` | Move Ansible roles between user and global scope. |
+| `get_ansible_role_vars` | Get variables for an Ansible role. |
+| `list_subscription_roles` | List available subscription roles (Ludus 2.0 Enterprise only). |
+| `install_subscription_roles` | Install subscription roles (Ludus 2.0 Enterprise only). |
+
+### Custom Builder
+
+| Tool | Description |
+|------|-------------|
+| `create_custom_os_template` | Create a custom OS template with specific packages and configuration. |
+| `create_kali_weekly_template` | Create a Kali Linux weekly template with automatic latest ISO detection. |
+| `get_common_iso_urls` | Get common ISO download URLs for popular operating systems. |
+| `build_container_based_template` | Build a custom container-based template for applications. |
+| `get_common_container_configs` | Get pre-configured container definitions for common applications. |
+| `create_custom_range_from_scenario` | Create a custom range configuration based on an existing scenario. |
+| `build_range_from_scratch` | Build a completely custom range configuration from scratch. |
+| `export_range_config_to_yaml` | Export a range configuration to a YAML file for download. |
+| `get_current_range_config_for_download` | Get the current range configuration and prepare it for download. |
+| `clone_and_modify_scenario` | Clone an existing scenario and modify it to create a new custom scenario. |
+| `build_range_from_description` | Build a custom range configuration from a natural language description. |
+| `list_vm_skeletons` | List all available VM skeleton templates. |
+| `get_vm_skeleton` | Get a specific VM skeleton template configuration. |
+| `list_range_skeletons` | List all available range skeleton templates. |
+| `get_range_skeleton` | Get a complete range skeleton configuration. |
+| `list_yaml_examples` | List all available YAML configuration examples. |
+| `get_yaml_example` | Get a ready-to-use YAML configuration example. |
+| `build_range_from_skeleton` | Build a complete range configuration starting from a skeleton. |
+
+### Role Management
+
+| Tool | Description |
+|------|-------------|
+| `list_installed_roles` | List all installed Ansible roles on the Ludus server. |
+| `check_role_installed` | Check if a specific Ansible role is installed. |
+| `install_role` | Install an Ansible role on the Ludus server via MCP. |
+| `get_required_roles_for_scenario` | Get the list of required Ansible roles for a specific scenario. |
+| `configure_ssh_role_installation` | Configure SSH access for automatic role installation on Ludus server. |
+| `ensure_scenario_roles` | Ensure all required roles for a scenario are installed, installing missing ones automatically. |
+| `get_role_info` | Get information about a specific role, including installation method and requirements. |
+| `install_galaxy_role` | Install an Ansible role directly from Ansible Galaxy. |
+| `install_role_from_url` | Install an Ansible role from a custom Git repository URL. |
+| `get_common_galaxy_roles` | Get a list of commonly used Ansible Galaxy roles for Ludus scenarios. |
+| `list_role_repositories` | List all roles that are available from GitHub repositories (directory-based roles). |
+
+### Blueprints
+
+| Tool | Description |
+|------|-------------|
+| `deploy_range_from_blueprint` | Set up and deploy a whole range from a blueprint in one call. |
+| `list_blueprints` | List all available blueprints. |
+| `get_blueprint` | Get a blueprint's metadata: name, description, version, tags, source. |
+| `create_blueprint` | Create a blueprint from a range configuration you already have. |
+| `export_blueprint` | Export a blueprint to a .tar.gz archive on disk. |
+| `import_blueprint` | Import a blueprint from a .tar.gz archive. |
+| `install_blueprint` | Install a blueprint's Ansible role and collection dependencies. |
+| `create_blueprint_from_range` | Create a reusable blueprint from an existing range. |
+| `apply_blueprint_to_range` | Apply a blueprint to a range. |
+| `copy_blueprint` | Copy a blueprint under a new ID. |
+| `delete_blueprint` | Delete a blueprint. |
+| `get_blueprint_config` | Get blueprint configuration. |
+| `update_blueprint_config` | Update blueprint configuration. |
+| `share_blueprint_with_users` | Share a blueprint with users. |
+| `unshare_blueprint_with_users` | Unshare a blueprint from users. |
+| `share_blueprint_with_groups` | Share a blueprint with groups. |
+| `unshare_blueprint_with_groups` | Unshare a blueprint from groups. |
+| `list_blueprint_access_users` | List users with access to a blueprint. |
+| `list_blueprint_access_groups` | List groups with access to a blueprint. |
+
+Blueprints that come from a content source must have their dependencies installed
+before deployment. Run `install_blueprint` first, otherwise the deploy fails
+partway through on missing roles, after the VMs have already been cloned.
+
+### Content Sources
+
+| Tool | Description |
+|------|-------------|
+| `list_sources` | List content sources configured on the Ludus server. |
+| `get_source` | Get details for a single content source. |
+| `get_source_catalog` | Get everything a source publishes, with install state for each item. |
+| `list_source_templates` | List packer templates published by a source. |
+| `list_source_blueprints` | List blueprints published by a source (GOAD, AD + Elastic, ...). |
+| `list_source_roles` | List Ansible roles published by a source. |
+| `list_source_collections` | List Ansible collections published by a source. |
+| `install_from_source` | Install templates, blueprints, roles or collections from a source. |
+| `add_source` | Register a new content source on the Ludus server. |
+| `update_source` | Update an existing source's URL, tracked ref, or backing archive. |
+| `sync_source` | Re-fetch a source so its catalog reflects the current upstream. |
+| `delete_source` | Remove a content source. |
+
+Adding a source installs nothing on its own. The usual sequence is `add_source`
+-> `get_source_catalog` -> `install_from_source`.
+
+### Quotas, Auto-Shutdown, and Log History
+
+| Tool | Description |
+|------|-------------|
+| `get_user_quotas` | Get the resource quotas applied to a user. |
+| `get_all_user_quotas` | Get quotas for every user on the server (admin only). |
+| `get_default_quotas` | Get the server-wide default quotas that new users inherit. |
+| `set_user_quotas` | Set resource quotas for one or more users (admin only). |
+| `get_group_quotas` | Get the default quotas configured for each group (admin only). |
+| `set_group_quotas` | Set default quotas for one or more groups (admin only). |
+| `get_auto_shutdown` | Get the auto-shutdown timeout for a range. |
+| `set_auto_shutdown` | Set how long a range may sit idle before it powers itself off. |
+| `list_range_log_history` | List previous range deployment logs, most recent first. |
+| `get_range_log_from_history` | Get the full contents of one archived range deployment log. |
+| `list_template_log_history` | List previous template build logs, most recent first. |
+| `get_template_log_from_history` | Get the full contents of one archived template build log. |
+
+Quotas and auto-shutdown are served by Ludus plugins and may not be loaded on a
+given server. When absent they return `available: false` with an explanation
+rather than an error implying a bad request; see the README.
+
+`get_range_logs` only returns the current or most recent deployment. The history
+tools reach the archive, which is what you want when comparing a failed
+deployment against the last one that worked.
 
 ### VM Management
 
-Additional VM lifecycle tools (v2 only).
-
 | Tool | Description |
 |------|-------------|
-| `destroy_vm` | Permanently destroy a specific VM |
-| `get_console_ticket` | Get a console access ticket for a VM |
+| `destroy_vm` | Destroy a specific VM. |
+| `get_vm_console_ticket` | Get a console (noVNC) ticket for a VM. |
+| `get_vm_console_view_url` | Get the console WebSocket URL for a ticket from get_vm_console_ticket. |
+
+The console is a WebSocket VNC channel, not a web page, so
+`get_vm_console_view_url` returns a `wss://` URL for a VNC/noVNC client rather
+than fetching a page. This is the way to reach a VM with no working network,
+such as one that failed its domain join.
 
 ### Diagnostics and Migration
 
-Tools for server diagnostics and migration tasks (v2 only).
+| Tool | Description |
+|------|-------------|
+| `get_diagnostics` | Get system diagnostics. |
+| `whoami` | Test authentication and get user info. |
+| `get_license` | Get license information. |
+| `migrate_sqlite_to_pocketbase` | Migrate from SQLite to PocketBase. |
+| `get_sdn_migration_status` | Get SDN migration status. |
+| `migrate_to_sdn` | Migrate to SDN networking. |
+| `setup_sdn` | Setup SDN infrastructure. |
+| `get_server_openapi_spec` | Fetch the Ludus server's own OpenAPI specification. |
+
+Use `get_server_openapi_spec` to discover what a particular server implements
+rather than assuming every documented endpoint exists; Ludus serves some features
+from optional plugins, and the published docs cover a superset of any one build.
+
+### Metrics and Monitoring
 
 | Tool | Description |
 |------|-------------|
-| `run_diagnostics` | Run server diagnostics and return results |
-| `whoami` | Return the currently authenticated user and server info |
-| `get_license` | Get Ludus license information |
-| `migrate_sqlite` | Run SQLite database migration |
-| `get_sdn_migration_status` | Check status of SDN migration |
-| `migrate_sdn` | Perform SDN migration |
-| `setup_sdn` | Set up software-defined networking |
+| `get_range_metrics` | Get comprehensive metrics for the range. |
+| `get_deployment_metrics` | Get metrics for the current deployment. |
+| `get_cost_estimation` | Get cost estimation for the range. |
+| `export_metrics` | Export metrics data. |
+| `get_range_ansible_inventory` | Get Ansible inventory for the range. |
+| `get_range_sshconfig` | Get SSH config for the range. |
+| `get_range_rdpconfigs` | Get RDP configuration files for the range. |
+| `get_range_etchosts` | Get /etc/hosts entries for the range. |
+| `test_network_connectivity` | Test network connectivity between VMs. |
+| `get_network_topology` | Get network topology visualization data. |
+| `diagnose_network_issues` | Diagnose network connectivity issues. |
+| `capture_network_traffic` | Capture network traffic on a VM. |
+| `health_checks` | Run health checks on all VMs in the range. |
 
-### Enhanced Range Management (v2)
-
-Extended range tools available on v2 servers (v2 only).
+### Automation
 
 | Tool | Description |
 |------|-------------|
-| `create_range` | Create a new empty range |
-| `assign_user_to_range` | Assign a user to a range |
-| `revoke_user_from_range` | Revoke a user's access to a range |
-| `list_range_users` | List users assigned to a range |
-| `list_accessible_ranges` | List all ranges the current user can access |
-| `get_default_range` | Get the current user's default range |
-| `set_default_range` | Set the current user's default range |
+| `create_deployment_pipeline` | Create a deployment pipeline with multiple stages. |
+| `schedule_range_tasks` | Schedule a recurring task for the range. |
+| `auto_scaling` | Define auto-scaling rules based on resource usage. |
+| `schedule_snapshots` | Schedule automatic snapshots for VMs. |
+| `clone_range` | Clone the current range to another user. |
+| `export_range_backup` | Export a range backup (configuration and snapshot metadata). |
+| `import_range_backup` | Import and restore range from backup. |
+| `bulk_vm_operations` | Perform bulk operations on multiple VMs. |
+| `delete_range` | Delete the entire range. |
+| `abort_and_remove_range` | Abort any active deployment and then remove the range. |
+| `get_recovery_recommendation` | Get recovery recommendations for failed deployments. |
 
-## Updated Tools in v2
+### Batch Operations
 
-The following existing tool categories have been enhanced when running against a v2 server.
+| Tool | Description |
+|------|-------------|
+| `batch_snapshot_hosts` | Create snapshots for multiple VMs in parallel. |
+| `batch_rollback_snapshots` | Rollback multiple VMs to a snapshot in parallel. |
+| `batch_remove_snapshots` | Remove snapshots from multiple VMs in parallel. |
+| `batch_power_on_hosts` | Power on multiple VMs in parallel. |
+| `batch_power_off_hosts` | Power off multiple VMs in parallel. |
+| `batch_get_vm_status` | Get status of multiple VMs in parallel. |
 
-### User Management Updates
+### AI Config Generation
 
-- The `add_user` tool now accepts an optional `email` parameter.
-- New support for OAuth2 provisioning for SSO-backed user creation.
-- Users can query their group memberships via updated user info responses.
+| Tool | Description |
+|------|-------------|
+| `generate_config_from_description` | Generate a complete Ludus range configuration from natural language description. |
+| `explain_range_design_decisions` | Explain the design decisions and best practices for a range configuration request. |
+| `suggest_range_enhancements` | Suggest enhancements to improve a range configuration. |
 
-### Template Updates
+### Profile Transformation
 
-- Roles can now be scoped to specific templates or ranges via a `role_scope` parameter.
-- Role variables (`role_vars`) can be set per-template when assigning roles.
-- Support for subscription-based roles that auto-update when the upstream source changes.
+| Tool | Description |
+|------|-------------|
+| `apply_adversary_profile` | Apply adversary profile to inject realistic vulnerabilities for red team training. |
+| `apply_defender_profile` | Apply defender profile to add monitoring and detection capabilities for blue team training. |
+| `list_available_profiles` | List all available adversary and defender profiles with descriptions. |
+| `preview_profile_changes` | Preview changes that would be made by applying a profile without modifying the config. |
+
+### Documentation
+
+| Tool | Description |
+|------|-------------|
+| `generate_range_documentation` | Generate comprehensive documentation for the range. |
+| `get_attack_path_documentation` | Generate attack path documentation for an attack technique. |
+| `export_lab_guide` | Export lab guide for training purposes. |
+| `create_scenario_playbook` | Generate a red or blue team playbook for a scenario. |
+
+### Collaboration
+
+| Tool | Description |
+|------|-------------|
+| `share_range_config` | Generate a shareable copy of the range configuration. |
+| `import_community_scenario` | Import a scenario from the community repository. |
+| `publish_scenario` | Publish a scenario to the community repository. |
+| `get_resource_quotas` | Get resource quotas and current usage. |
+| `optimize_resource_allocation` | Optimize resource allocation for the range. |
+| `schedule_maintenance_window` | Schedule a maintenance window for the range. |
+| `list_ranges` | List all ranges (admin only). |
+
+### Integrations
+
+| Tool | Description |
+|------|-------------|
+| `webhook_integration` | Configure a webhook for range events. |
+| `slack_notifications` | Configure Slack notifications for deployment status. |
+| `jira_integration` | Configure JIRA issue creation for failed deployments. |
+| `git_sync` | Sync range configurations with a Git repository. |
+
 
 ## Usage Examples
 

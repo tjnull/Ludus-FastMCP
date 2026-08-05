@@ -26,13 +26,6 @@ def _make_client(api_version):
     return client
 
 
-@pytest.mark.asyncio
-async def test_build_template_v1_uses_template_string():
-    client = _make_client("v1")
-    await client.build_template(template_name="kali-linux")
-    call_kwargs = client.client.request.call_args.kwargs
-    assert "template_name" in call_kwargs.get("json", {})
-
 
 @pytest.mark.asyncio
 async def test_build_template_v2_uses_templates_array():
@@ -43,13 +36,6 @@ async def test_build_template_v2_uses_templates_array():
     assert isinstance(call_kwargs["json"]["templates"], list)
 
 
-@pytest.mark.asyncio
-async def test_add_user_v1_no_email():
-    client = _make_client("v1")
-    await client.add_user(user_id="testuser", name="Test User")
-    call_kwargs = client.client.request.call_args.kwargs
-    assert "email" not in call_kwargs.get("json", {})
-
 
 @pytest.mark.asyncio
 async def test_add_user_v2_includes_email():
@@ -59,13 +45,6 @@ async def test_add_user_v2_includes_email():
     assert call_kwargs["json"]["email"] == "test@example.com"
 
 
-@pytest.mark.asyncio
-async def test_reset_password_v1_uses_passwordreset():
-    client = _make_client("v1")
-    await client.reset_user_proxmox_password("testuser")
-    call_kwargs = client.client.request.call_args.kwargs
-    assert call_kwargs["url"] == "/user/passwordreset"
-
 
 @pytest.mark.asyncio
 async def test_reset_password_v2_uses_credentials():
@@ -74,12 +53,6 @@ async def test_reset_password_v2_uses_credentials():
     call_kwargs = client.client.request.call_args.kwargs
     assert call_kwargs["url"] == "/api/v2/user/credentials"
 
-
-@pytest.mark.asyncio
-async def test_get_range_access_v1():
-    client = _make_client("v1")
-    await client.get_range_access()
-    assert client.client.request.call_args.kwargs["url"] == "/range/access"
 
 
 @pytest.mark.asyncio

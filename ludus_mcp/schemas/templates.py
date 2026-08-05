@@ -34,10 +34,6 @@ class TemplateAdd(BaseModel):
         default=False,
         description="Remove existing template directory if it exists"
     )
-    include_files: bool = Field(
-        default=True,
-        description="Include files in upload (creates tar archive)"
-    )
 
 
 class TemplateBuild(BaseModel):

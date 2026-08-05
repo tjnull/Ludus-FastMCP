@@ -103,7 +103,7 @@ class TestAsyncLRUCache:
 
         # Invalidate specific key
         cache.invalidate("key1")
-        assert cache.get_or_set == 0
+        assert cache.get_stats()["size"] == 0
 
         # Add multiple entries
         await cache.get_or_set("key1", expensive_function)
@@ -197,3 +197,85 @@ class TestAsyncLRUCache:
 
         # Should be the same instance
         assert cache1 is cache2
+
+
+class TestCacheEvictionAndIsolation:
+    """Regression tests for LRU ordering and per-decorator cache isolation."""
+
+    @pytest.mark.asyncio
+    async def test_eviction_drops_least_recently_used_not_oldest_inserted(self):
+        """A key that keeps being read must survive eviction.
+
+        Eviction used to pick the oldest *insertion*, so a hot key was thrown
+        out while a newer but untouched key stayed.
+        """
+        cache = AsyncLRUCache(max_size=2, ttl_seconds=60)
+
+        async def value(v):
+            return v
+
+        await cache.get_or_set("hot", value, "hot")
+        await cache.get_or_set("cold", value, "cold")
+
+        # Touch "hot" so it is the most recently used entry
+        assert await cache.get_or_set("hot", value, "ignored") == "hot"
+
+        # Inserting a third entry must evict "cold", the least recently used
+        await cache.get_or_set("new", value, "new")
+
+        assert cache.get_stats()["size"] == 2
+        assert "hot" in cache.cache
+        assert "cold" not in cache.cache
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_does_not_extend_ttl(self):
+        """Reads must not keep a stale entry alive forever."""
+        cache = AsyncLRUCache(max_size=10, ttl_seconds=0.2)
+        calls = 0
+
+        async def counter():
+            nonlocal calls
+            calls += 1
+            return calls
+
+        await cache.get_or_set("k", counter)
+        await asyncio.sleep(0.1)
+        await cache.get_or_set("k", counter)  # hit, must not reset the clock
+        await asyncio.sleep(0.15)
+        await cache.get_or_set("k", counter)  # entry is now past its TTL
+
+        assert calls == 2
+
+    @pytest.mark.asyncio
+    async def test_each_decorated_function_honors_its_own_ttl(self):
+        """@cached(...) arguments must not be ignored in favour of a shared cache."""
+        get_cache()  # ensure the global instance exists first
+
+        @cached(ttl_seconds=0.1, max_size=8)
+        async def short_lived():
+            return object()
+
+        @cached(ttl_seconds=60, max_size=8)
+        async def long_lived():
+            return object()
+
+        first_short, first_long = await short_lived(), await long_lived()
+        await asyncio.sleep(0.15)
+
+        assert await short_lived() is not first_short  # expired
+        assert await long_lived() is first_long  # still cached
+
+    @pytest.mark.asyncio
+    async def test_decorated_functions_do_not_share_entries(self):
+        @cached(ttl_seconds=60)
+        async def alpha():
+            return "alpha"
+
+        @cached(ttl_seconds=60)
+        async def beta():
+            return "beta"
+
+        assert await alpha() == "alpha"
+        assert await beta() == "beta"
+        assert alpha.cache_stats()["size"] == 1
+        assert beta.cache_stats()["size"] == 1

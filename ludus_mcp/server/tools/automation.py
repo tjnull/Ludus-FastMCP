@@ -5,6 +5,8 @@ from fastmcp import FastMCP
 from ludus_mcp.core.client import LudusAPIClient
 from ludus_mcp.server.handlers.automation_orchestration import AutomationOrchestrationHandler
 from ludus_mcp.server.handlers.backup import BackupHandler
+from ludus_mcp.server.handlers.orchestration import DeploymentOrchestrator
+from ludus_mcp.server.handlers.resource_management import ResourceManagementHandler
 from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_response
 
 
@@ -26,7 +28,6 @@ def create_automation_tools(client: LudusAPIClient) -> FastMCP:
     async def create_deployment_pipeline(
         name: str,
         stages: list[dict[str, Any]],
-        triggers: dict[str, Any] | None = None,
         user_id: str | None = None
     ) -> dict:
         """Create a deployment pipeline with multiple stages.
@@ -34,58 +35,59 @@ def create_automation_tools(client: LudusAPIClient) -> FastMCP:
         Args:
             name: Pipeline name
             stages: List of pipeline stages with configurations
-            triggers: Optional trigger conditions (schedule, webhook, etc.)
             user_id: Optional user ID (admin only)
 
         Returns:
             Pipeline creation result
         """
         handler = registry.get_handler("automation", AutomationOrchestrationHandler)
-        result = await handler.create_deployment_pipeline(name, stages, triggers, user_id)
+        result = await handler.create_deployment_pipeline(
+            pipeline_name=name, stages=stages, user_id=user_id
+        )
         return format_tool_response(result)
 
     @mcp.tool()
     async def schedule_range_tasks(
-        tasks: list[dict[str, Any]],
+        task_type: str,
         schedule: str,
+        parameters: dict[str, Any] | None = None,
         user_id: str | None = None
     ) -> dict:
-        """Schedule recurring tasks for the range.
+        """Schedule a recurring task for the range.
 
         Args:
-            tasks: List of tasks to schedule
+            task_type: Type of task to schedule
             schedule: Cron expression for scheduling
+            parameters: Optional task-specific parameters
             user_id: Optional user ID (admin only)
 
         Returns:
             Task scheduling result
         """
         handler = registry.get_handler("automation", AutomationOrchestrationHandler)
-        result = await handler.schedule_range_tasks(tasks, schedule, user_id)
+        result = await handler.schedule_range_tasks(
+            task_type=task_type, schedule=schedule,
+            parameters=parameters, user_id=user_id
+        )
         return format_tool_response(result)
 
     @mcp.tool()
     async def auto_scaling(
-        enable: bool = True,
-        min_vms: int = 1,
-        max_vms: int = 10,
-        scaling_policy: dict[str, Any] | None = None,
+        rules: list[dict[str, Any]],
         user_id: str | None = None
     ) -> dict:
-        """Configure auto-scaling for the range.
+        """Define auto-scaling rules based on resource usage.
 
         Args:
-            enable: Enable or disable auto-scaling
-            min_vms: Minimum number of VMs
-            max_vms: Maximum number of VMs
-            scaling_policy: Scaling policy configuration
+            rules: List of scaling rules, each describing the resource to watch,
+                the threshold, and the action to take
             user_id: Optional user ID (admin only)
 
         Returns:
             Auto-scaling configuration result
         """
         handler = registry.get_handler("automation", AutomationOrchestrationHandler)
-        result = await handler.auto_scaling(enable, min_vms, max_vms, scaling_policy, user_id)
+        result = await handler.auto_scaling(rules=rules, user_id=user_id)
         return format_tool_response(result)
 
     # ==================== SNAPSHOT AUTOMATION TOOLS ====================
@@ -136,22 +138,22 @@ def create_automation_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def export_range_backup(
-        include_vms: bool = True,
-        include_config: bool = True,
+        include_snapshots: bool = True,
         user_id: str | None = None
     ) -> dict:
-        """Export range backup.
+        """Export a range backup (configuration and snapshot metadata).
 
         Args:
-            include_vms: Include VM disk images in backup
-            include_config: Include configuration in backup
+            include_snapshots: Include snapshot metadata in the backup
             user_id: Optional user ID (admin only)
 
         Returns:
-            Backup export result with download link
+            Backup export result
         """
         handler = registry.get_handler("backup", BackupHandler)
-        result = await handler.export_range_backup(include_vms, include_config, user_id)
+        result = await handler.export_range_backup(
+            include_snapshots=include_snapshots, user_id=user_id
+        )
         return format_tool_response(result)
 
     @mcp.tool()
@@ -183,23 +185,25 @@ def create_automation_tools(client: LudusAPIClient) -> FastMCP:
     @mcp.tool()
     async def bulk_vm_operations(
         operation: str,
-        vm_names: list[str] | None = None,
-        parameters: dict[str, Any] | None = None,
+        vm_filter: dict[str, Any] | None = None,
         user_id: str | None = None
     ) -> dict:
         """Perform bulk operations on multiple VMs.
 
         Args:
-            operation: Operation to perform (power_on, power_off, snapshot, delete)
-            vm_names: Optional list of VM names (defaults to all VMs)
-            parameters: Optional operation-specific parameters
+            operation: Operation to perform (power_on, power_off, snapshot, delete, restart)
+            vm_filter: Optional filter selecting which VMs to act on. Supported keys:
+                "status" (exact match), "template" (substring), "name_pattern"
+                (case-insensitive substring). Omit to target every VM in the range.
             user_id: Optional user ID (admin only)
 
         Returns:
             Bulk operation results
         """
-        handler = registry.get_handler("automation", AutomationOrchestrationHandler)
-        result = await handler.bulk_vm_operations(operation, vm_names, parameters, user_id)
+        handler = registry.get_handler("resource_management", ResourceManagementHandler)
+        result = await handler.bulk_vm_operations(
+            operation=operation, vm_filter=vm_filter, user_id=user_id
+        )
         return format_tool_response(result)
 
     @mcp.tool()
@@ -317,8 +321,8 @@ def create_automation_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Recovery recommendations based on failure analysis
         """
-        handler = registry.get_handler("automation", AutomationOrchestrationHandler)
-        result = await handler.get_recovery_recommendation(user_id)
+        handler = registry.get_handler("orchestrator", DeploymentOrchestrator)
+        result = await handler.get_recovery_recommendation(user_id=user_id)
         return format_tool_response(result)
 
     return mcp

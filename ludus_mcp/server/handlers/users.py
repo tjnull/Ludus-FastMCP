@@ -29,6 +29,7 @@ class UserHandler:
         self,
         user_id: str,
         name: str | None = None,
+        is_admin: bool = False,
         proxmox_username: str | None = None,
         proxmox_password: str | None = None,
         email: str | None = None,
@@ -39,6 +40,7 @@ class UserHandler:
         Args:
             user_id: Unique user identifier
             name: Display name for the user
+            is_admin: Whether the user is an admin
             proxmox_username: Proxmox username for the user
             proxmox_password: Proxmox password for the user
             email: Email address (required for v2)
@@ -50,6 +52,7 @@ class UserHandler:
         return await self.client.add_user(
             user_id=user_id,
             name=name,
+            is_admin=is_admin,
             proxmox_username=proxmox_username,
             proxmox_password=proxmox_password,
             email=email,
@@ -65,31 +68,37 @@ class UserHandler:
         logger.debug("Getting user memberships")
         return await self.client.get_user_memberships()
 
-    async def remove_user(self, user_id: str) -> dict[str, Any]:
+    async def remove_user(
+        self, user_id: str, delete_default_range: bool = False
+    ) -> dict[str, Any]:
         """
         Remove a user from Ludus.
 
         Args:
             user_id: User identifier to remove
+            delete_default_range: Also delete the user's default range (v2 only).
+                Without this the range record outlives its owner.
 
         Returns:
             Removal result
         """
         logger.info(f"Removing user: {user_id}")
-        return await self.client.remove_user(user_id)
+        return await self.client.remove_user(
+            user_id, delete_default_range=delete_default_range
+        )
 
-    async def get_user_apikey(self, user_id: str) -> dict[str, Any]:
+    async def regenerate_user_apikey(self, user_id: str) -> dict[str, Any]:
         """
-        Get or regenerate API key for a user.
+        Issue a new API key for a user, invalidating the previous one.
 
         Args:
             user_id: User identifier
 
         Returns:
-            API key information
+            The newly generated API key
         """
         logger.info(f"Getting API key for user: {user_id}")
-        return await self.client.get_user_apikey(user_id)
+        return await self.client.regenerate_user_apikey(user_id)
 
     async def get_user_wireguard(self, user_id: str) -> str:
         """
@@ -167,7 +176,8 @@ class UserHandler:
             f"**Active Ranges:** {range_count}",
             "",
             "### Available Actions:",
-            "- Get API key: `ludus.get_user_apikey(user_id='{}')`".format(user_id),
+            "- Rotate API key (invalidates the current one): "
+            "`ludus.regenerate_user_apikey(user_id='{}')`".format(user_id),
             "- Get WireGuard config: `ludus.get_user_wireguard(user_id='{}')`".format(user_id),
             "- Update Proxmox creds: `ludus.update_user_proxmox_creds(...)`",
         ]

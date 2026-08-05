@@ -2,30 +2,34 @@
 
 [![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/tjnull/Ludus-FastMCP)
 [![Python](https://img.shields.io/badge/python-3.11+-green.svg)](https://python.org)
-[![Ludus](https://img.shields.io/badge/Ludus-v1%20%26%20v2-orange.svg)](https://docs.ludus.cloud)
+[![Ludus](https://img.shields.io/badge/Ludus-2.0%2B-orange.svg)](https://docs.ludus.cloud)
 [![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
 
 A Model Context Protocol (MCP) server for automating [Ludus](https://docs.ludus.cloud) cyber range environments through AI assistants written in Python.
 
 ## Overview
 
-Ludus FastMCP enables AI-powered management of Ludus cyber ranges through natural language commands. The server exposes **190+ tools** across 20 modules for range lifecycle management, scenario deployment, template creation, Ansible role management, and security monitoring integration.
+Ludus FastMCP enables AI-powered management of Ludus cyber ranges through natural language commands. The server exposes **231 tools** across 23 modules for range lifecycle management, scenario deployment, template creation, Ansible role management, and security monitoring integration.
 
-**Supports both Ludus v1 and v2** with automatic version detection. All existing v1 tools work unchanged, and v2 adds blueprints, groups, VM console, diagnostics, enhanced range management, and more.
+**Requires Ludus 2.0 or later.** This release targets the Ludus 2.x API only, which is what makes blueprints, groups, content sources, VM console access, quotas and diagnostics available. Support for the Ludus 1.x API was removed; pin ludus-fastmcp to a 1.x release if you still run a Ludus 1.x server.
+
+The client covers **every endpoint in the Ludus API**, validated against a live Ludus 2.3.0 server.
 
 ### Key Capabilities
 
 | Category | Description |
 |----------|-------------|
 | **Range Management** | Create, configure, deploy, and manage virtual lab environments |
-| **Blueprints** | Save, share, and apply reusable range configurations (v2) |
-| **Groups** | Organize users and ranges with group-based access control (v2) |
+| **Blueprints** | Create, export, import, share, and apply reusable range configurations |
+| **Content Sources** | Add git or archive catalogs of templates, roles, and prebuilt labs such as GOAD |
+| **Groups** | Organize users and ranges with group-based access control |
 | **Scenario Deployment** | Pre-built scenarios for AD, red/blue/purple team, and malware analysis |
 | **Template Builder** | Custom OS templates, skeleton configurations, and YAML generation |
-| **Role Management** | Ansible Galaxy integration, custom roles, and subscription roles |
+| **Role Management** | Ansible Galaxy integration, custom roles, subscription roles, and scope control |
 | **SIEM Integration** | Wazuh, Splunk, Elastic Stack, and Security Onion support |
 | **AI Configuration** | Natural language to YAML configuration conversion |
-| **Diagnostics** | System health, license info, and migration tools (v2) |
+| **Diagnostics** | System health, license info, deployment log history, and migration tools |
+| **Quotas & Limits** | Per-user and per-group resource quotas, plus range auto-shutdown (plugin) |
 
 ### Supported Platforms
 
@@ -36,8 +40,9 @@ Works with any MCP-compatible client including Claude Desktop, VS Code (Cline), 
 ### Requirements
 
 - Python 3.11+
-- Access to a Ludus server instance (v1 or v2)
-- Ludus API key or JWT token (for v2 Pro/SSO users)
+- FastMCP 3.x (installed automatically)
+- A Ludus server running **2.0 or later**
+- Ludus API key, or a JWT token for Pro/SSO deployments
 
 ### Installation
 
@@ -69,7 +74,7 @@ For manual configuration options, see the [Configuration Guide](docs/configurati
 
 ```bash
 ludus-fastmcp --setup          # Interactive setup wizard
-ludus-fastmcp --list-tools     # List all 190+ available tools
+ludus-fastmcp --list-tools     # List all 231 available tools
 ludus-fastmcp --version        # Display version information
 ludus-fastmcp                  # Start MCP server
 ludus-fastmcp --daemon         # Run as background service
@@ -114,28 +119,64 @@ Examples of using Ludus-FastMCP with grok code through Opencode.
 |----------|-------------|
 | [Getting Started](docs/getting-started.md) | Installation, setup, and first deployment |
 | [Configuration](docs/configuration.md) | Environment variables and MCP client setup |
-| [Tools Reference](docs/tools-reference.md) | Complete documentation for all 190+ tools |
+| [Tools Reference](docs/tools-reference.md) | Complete documentation for all 231 tools |
 | [Scenarios](docs/scenarios.md) | Pre-built deployment scenarios |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 | [Safety](docs/safety.md) | Safety features and best practices |
 
-## Ludus Version Compatibility
+## Ludus Server Requirements
 
-| Feature | Ludus v1 | Ludus v2 |
-|---------|----------|----------|
-| Auto-detection | Automatic | Automatic |
-| API Key auth | Yes | Yes |
-| JWT auth (Pro/SSO) | No | Yes |
-| Range management | Yes | Yes |
-| Snapshots | Yes | Yes |
-| Templates | Yes | Yes (+ subscription roles) |
-| Blueprints | No | Yes |
-| Groups | No | Yes |
-| VM Console | No | Yes |
-| Diagnostics | No | Yes |
-| Multi-range access | No | Yes |
+This release speaks the Ludus 2.x API only. Every request goes to `/api/v2`;
+there is no v1 code path left to fall back to.
 
-Version is auto-detected on first API call. Override with `LUDUS_API_VERSION=v1` or `LUDUS_API_VERSION=v2`. v2-only tools return a clear error message when used against a v1 server.
+On the first call the client asks the server for its version and refuses to
+continue if it does not answer as a 2.x server, so a mismatch surfaces once, up
+front, instead of as a puzzling 404 from whichever tool you happened to run:
+
+```
+https://ludus.example:8080 does not serve the Ludus 2.x API
+(GET /api/v2/ returned HTTP 404). This release requires Ludus 2.0 or later;
+upgrade the server, or pin ludus-fastmcp to a 1.x release for a Ludus 1.x server.
+```
+
+Set `LUDUS_API_VERSION=v2` to assert the version yourself and skip that check
+(it saves one request per session). `LUDUS_API_VERSION=v1` is rejected at
+startup rather than silently ignored.
+
+### Still on Ludus 1.x?
+
+Pin an older release:
+
+```bash
+pipx install "git+https://github.com/tjnull/Ludus-FastMCP@v1.0.0"
+```
+
+Upgrading the server is the better path: blueprints, content sources, groups,
+quotas, deployment log history and VM console access do not exist in the 1.x
+API at all.
+
+### Plugin-gated features
+
+Some Ludus capabilities ship as server plugins that may not be loaded on a given
+install. Quotas and auto-shutdown are the common examples. When a plugin is
+absent, the Ludus API answers with HTTP 404 even though the request was correct.
+
+Rather than reporting that as a missing endpoint, those tools return a clear
+result so an AI assistant does not go hunting for a nonexistent bug:
+
+```json
+{
+  "available": false,
+  "feature": "Quotas",
+  "error": "Quotas is not available on this Ludus server.",
+  "reason": "This capability is provided by a Ludus plugin that is not loaded on the server.",
+  "hint": "The request was well-formed. Do not retry or try alternative endpoints."
+}
+```
+
+Endpoints a server does not implement at all (HTTP 501, such as `/range/sshconfig`
+on some builds) are reported the same way, with an explicit note that retrying
+will not help.
 
 ## Resources
 
@@ -164,3 +205,7 @@ This software is intended for authorized security testing, educational purposes,
 
 - [Ludus](https://github.com/badsectorlabs/ludus) by Bad Sector Labs
 - [FastMCP](https://gofastmcp.com), and the Model Context Protocol community.
+
+## Credits
+
+- [@LouDeter](https://github.com/LouDeter) - MCP request/response logging middleware and log-file support ([PR #8](https://github.com/tjnull/Ludus-FastMCP/pull/8))

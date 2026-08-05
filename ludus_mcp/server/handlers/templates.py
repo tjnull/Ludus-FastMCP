@@ -1,10 +1,5 @@
 """Template operation handlers."""
 
-import os
-import json
-import base64
-import tarfile
-import io
 from pathlib import Path
 from ludus_mcp.core.client import LudusAPIClient
 from ludus_mcp.schemas.templates import Template, TemplateApply, TemplateAdd, TemplateBuild
@@ -59,22 +54,12 @@ class TemplateHandler:
         if not template_dir.is_dir():
             raise ValueError(f"Path is not a directory: {data.directory}")
 
-        # Create template payload with directory structure
-        # The Ludus API expects either:
-        # 1. A tar archive (base64 encoded)
-        # 2. A directory structure as JSON
-        template_payload = {
-            "directory": str(template_dir.absolute()),
-            "force": data.force
-        }
-
-        # If we need to send files, tar them up
-        if data.include_files:
-            tar_data = self._create_tar_archive(template_dir)
-            template_payload["archive"] = base64.b64encode(tar_data).decode('utf-8')
-            template_payload["archive_format"] = "tar.gz"
-
-        return await self.client.add_template(template_payload, user_id)
+        # The API takes the directory as an uncompressed tar upload; the client
+        # builds the archive. A JSON payload describing the directory was
+        # posted to /templates/add, which does not exist.
+        return await self.client.add_template(
+            str(template_dir.absolute()), force=data.force, user_id=user_id
+        )
 
     async def build_template(
         self, data: TemplateBuild, user_id: str | None = None
@@ -150,21 +135,3 @@ class TemplateHandler:
         """
         logger.info("Aborting template operation")
         return await self.client.abort_template_operation(user_id)
-
-    def _create_tar_archive(self, directory: Path) -> bytes:
-        """Create a tar.gz archive of a directory.
-
-        Args:
-            directory: Path to directory to archive
-
-        Returns:
-            Bytes of tar.gz archive
-        """
-        tar_buffer = io.BytesIO()
-
-        with tarfile.open(fileobj=tar_buffer, mode='w:gz') as tar:
-            tar.add(str(directory), arcname=directory.name)
-
-        tar_buffer.seek(0)
-        return tar_buffer.read()
-

@@ -37,7 +37,7 @@ class TemplateAdvancedHandler:
         """
         try:
             # Get both template configurations
-            templates = await self.client.list_templates(user_id)
+            templates = await self.client.list_templates()
 
             t1 = next((t for t in templates if t.get("name") == template1 or t.get("id") == template1), None)
             t2 = next((t for t in templates if t.get("name") == template2 or t.get("id") == template2), None)
@@ -278,7 +278,7 @@ class TemplateAdvancedHandler:
             Dictionary with template dependencies
         """
         try:
-            templates = await self.client.list_templates(user_id)
+            templates = await self.client.list_templates()
             template = next((t for t in templates if t.get("name") == template_name or t.get("id") == template_name), None)
 
             if not template:
@@ -380,7 +380,7 @@ class TemplateAdvancedHandler:
             Dictionary with optimization suggestions
         """
         try:
-            templates = await self.client.list_templates(user_id)
+            templates = await self.client.list_templates()
             template = next((t for t in templates if t.get("name") == template_name or t.get("id") == template_name), None)
 
             if not template:

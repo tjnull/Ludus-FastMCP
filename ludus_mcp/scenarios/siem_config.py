@@ -5,6 +5,12 @@ from typing import Any, Literal
 SIEMType = Literal["wazuh", "splunk", "elastic", "security-onion", "none"]
 
 
+# Wazuh agent MSI used when the installed role does not provide a default.
+WAZUH_AGENT_PACKAGE = (
+    "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.8.0-1.msi"
+)
+
+
 def get_wazuh_server_config(range_id: str, vlan: int = 10, ip_last_octet: int = 100) -> dict[str, Any]:
     """Get Wazuh server configuration.
     
@@ -157,6 +163,17 @@ def add_siem_agent_to_vm(
         vm_config["ansible_roles"].append({
             "name": "aleemladha.ludus_wazuh_agent",
             "vars": {
+                # The role reads ludus_wazuh_siem_server; "wazuh_manager_ip"
+                # was our own invention and the role never looked at it, so
+                # agents were configured with an empty manager address.
+                "ludus_wazuh_siem_server": siem_server_ip,
+                # Older installed copies of the role reference the package URL
+                # without the ludus_ prefix and ship no default for it, which
+                # fails the play with "'wazuh_agent_install_package' is
+                # undefined". Set both names so either revision works.
+                "ludus_wazuh_agent_install_package": WAZUH_AGENT_PACKAGE,
+                "wazuh_agent_install_package": WAZUH_AGENT_PACKAGE,
+                # kept for backwards compatibility with anything reading it
                 "wazuh_manager_ip": siem_server_ip,
             },
         })

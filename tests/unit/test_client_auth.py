@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 from ludus_mcp.core.client import LudusAPIClient
 
 
-def _make_client(api_key="test.apikey", jwt_token="", api_version="v1"):
+def _make_client(api_key="test.apikey", jwt_token="", api_version="v2"):
     with patch("ludus_mcp.core.client.get_settings") as mock_settings:
         settings = MagicMock()
         settings.ludus_api_url = "https://test.ludus.local:8080"

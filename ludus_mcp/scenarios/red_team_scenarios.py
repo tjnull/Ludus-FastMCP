@@ -67,7 +67,11 @@ class RedTeamScenarioBuilder(BaseScenarioBuilder):
         
         # Built-in groups that might be assigned to users
         # These groups already exist in AD (CN=Builtin,DC=corp,DC=local) and should NOT be created
-        builtin_group_names = {"Power Users", "Backup Operators", "Remote Desktop Users"}
+        builtin_group_names = {
+            "Power Users", "Backup Operators", "Remote Desktop Users",
+            "IIS_IUSRS", "Users", "Administrators", "Guests",
+            "Print Operators", "Server Operators", "Account Operators",
+        }
         
         # Dynamically create OUs and groups based on departments in the user list
         departments_found = set()
@@ -103,6 +107,29 @@ class RedTeamScenarioBuilder(BaseScenarioBuilder):
                     "description": f"{dept} Department members"
                 })
         
+        # Create every other group the users are assigned to (manager groups,
+        # Executive, ...). Without this, groups_needed was collected and then
+        # discarded, so user creation failed on the DC with
+        # "Failed to find the AD object DNs for groups.set. Invalid identities".
+        for group_name in sorted(groups_needed):
+            if group_name in builtin_group_names:
+                continue  # already exists in CN=Builtin; creating it errors
+            if any(g["name"] == group_name for g in ad_groups):
+                continue
+            group_path = "DC=corp,DC=local"
+            if "Managers" in group_name:
+                dept = group_name.replace("Managers", "").strip()
+                if dept in departments_found:
+                    group_path = f"OU={dept},DC=corp,DC=local"
+            elif group_name in departments_found:
+                group_path = f"OU={group_name},DC=corp,DC=local"
+            ad_groups.append({
+                "name": group_name,
+                "scope": "global",
+                "path": group_path,
+                "description": f"{group_name} group",
+            })
+
         # If no custom users, ensure default departments are included
         if not custom_users_dict:
             default_departments = ["IT", "HR", "Finance"]
@@ -306,7 +333,11 @@ class RedTeamScenarioBuilder(BaseScenarioBuilder):
         
         # Built-in groups that might be assigned to users
         # These groups already exist in AD (CN=Builtin,DC=corp,DC=local) and should NOT be created
-        builtin_group_names = {"Power Users", "Backup Operators", "Remote Desktop Users"}
+        builtin_group_names = {
+            "Power Users", "Backup Operators", "Remote Desktop Users",
+            "IIS_IUSRS", "Users", "Administrators", "Guests",
+            "Print Operators", "Server Operators", "Account Operators",
+        }
         
         # Dynamically create OUs and groups based on departments in the user list
         departments_found = set()
@@ -342,6 +373,29 @@ class RedTeamScenarioBuilder(BaseScenarioBuilder):
                     "description": f"{dept} Department members"
                 })
         
+        # Create every other group the users are assigned to (manager groups,
+        # Executive, ...). Without this, groups_needed was collected and then
+        # discarded, so user creation failed on the DC with
+        # "Failed to find the AD object DNs for groups.set. Invalid identities".
+        for group_name in sorted(groups_needed):
+            if group_name in builtin_group_names:
+                continue  # already exists in CN=Builtin; creating it errors
+            if any(g["name"] == group_name for g in ad_groups):
+                continue
+            group_path = "DC=corp,DC=local"
+            if "Managers" in group_name:
+                dept = group_name.replace("Managers", "").strip()
+                if dept in departments_found:
+                    group_path = f"OU={dept},DC=corp,DC=local"
+            elif group_name in departments_found:
+                group_path = f"OU={group_name},DC=corp,DC=local"
+            ad_groups.append({
+                "name": group_name,
+                "scope": "global",
+                "path": group_path,
+                "description": f"{group_name} group",
+            })
+
         # If no custom users, ensure default departments are included
         if not custom_users_dict:
             default_departments = ["IT", "HR", "Finance", "Sales"]

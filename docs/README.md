@@ -1,6 +1,6 @@
 # Ludus FastMCP Documentation
 
-Documentation for Ludus FastMCP - MCP server for Ludus cyber range automation with 157 tools across 15 modules.
+Documentation for Ludus FastMCP - MCP server for Ludus cyber range automation with 231 tools across 23 modules.
 
 ## Contents
 
@@ -15,7 +15,7 @@ Documentation for Ludus FastMCP - MCP server for Ludus cyber range automation wi
 
 | Document | Description |
 |----------|-------------|
-| [Tools Reference](tools-reference.md) | Complete documentation for all 157 tools |
+| [Tools Reference](tools-reference.md) | Complete documentation for all 231 tools |
 | [Scenarios](scenarios.md) | Pre-built deployment scenarios |
 
 ### Operations
@@ -93,23 +93,33 @@ ludus-ai tool call-tool <name>  # Execute tools directly
 
 ## Tool Categories
 
+See the [Tools Reference](tools-reference.md) for every tool by name.
+
 | Category | Tools | Description |
 |----------|-------|-------------|
-| Core Operations | 16 | Range, snapshot, power, network, template management |
-| Deployment | 12 | Scenario deployment, orchestration, monitoring |
-| User Management | 5 | User accounts, API keys, access control |
-| Security Integration | 16 | SIEM configuration, compliance, vulnerability |
-| Templates Advanced | 13 | Template discovery, creation, building |
-| Metrics and Monitoring | 17 | Performance, health checks, inventory |
-| Automation | 11 | Pipelines, scheduling, bulk operations |
-| Integrations | 4 | Webhooks, Slack, Jira, Git |
-| Documentation | 4 | Lab guides, attack paths, playbooks |
-| Collaboration | 11 | Sharing, resources, community |
+| Core Operations | 21 | Range, snapshot, power, network, template management |
+| Blueprints | 19 | Blueprint lifecycle, export/import, sharing, access control |
 | Custom Builder | 18 | Skeleton templates, custom OS/containers |
-| Range Management | 6 | List, search, delete, cleanup |
-| AI Config Generation | 8 | Natural language to YAML |
-| Profile Transformation | 5 | Adversary/defender profiles |
+| Templates Advanced | 18 | Template discovery, upload, building, role scope |
+| Security Integration | 14 | SIEM configuration, compliance, access control |
+| Deployment | 13 | Scenario deployment, orchestration, monitoring |
+| Metrics and Monitoring | 13 | Performance, health checks, inventory |
+| Quotas & Limits | 12 | Quotas, auto-shutdown, deployment log history |
+| Content Sources | 12 | Git/archive catalogs of templates, roles, blueprints |
+| Automation | 11 | Pipelines, scheduling, bulk operations |
 | Role Management | 11 | Ansible Galaxy, custom roles |
+| Groups | 9 | Group management, membership, range access |
+| Diagnostics & Migration | 8 | Diagnostics, license, OpenAPI, SQLite/SDN migration |
+| Collaboration | 7 | Sharing, resources, community |
+| Enhanced Range Management | 7 | Range creation, user assignment, defaults |
+| User Management | 7 | User accounts, API keys, credentials |
+| Batch Operations | 6 | Bulk snapshot, power, and status operations |
+| Range Management | 7 | List, search, delete, cleanup |
+| Documentation | 4 | Lab guides, attack paths, playbooks |
+| Integrations | 4 | Webhooks, Slack, Jira, Git |
+| Profile Transformation | 4 | Adversary/defender profiles |
+| AI Config Generation | 3 | Natural language to YAML |
+| VM Management | 3 | VM destruction, console tickets and URLs |
 
 ## External Resources
 

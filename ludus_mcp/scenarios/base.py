@@ -125,6 +125,24 @@ class BaseScenarioBuilder:
             "cpus": cpus,
         }
         vm_config.update(kwargs)
+
+        # Ludus's schema requires each VM to declare exactly one of "windows" or
+        # "linux" (oneOf). Builders frequently omitted both, and Ludus rejected
+        # the whole config with "ludus.N: windows is required" - which named an
+        # index rather than the VM, making it painful to trace. Infer it from the
+        # template when the caller did not say.
+        if "windows" not in vm_config and "linux" not in vm_config:
+            if "win" in template.lower():
+                # sysprep MUST default to True: every Windows VM cloned from the
+                # same template otherwise shares a machine SID, and the second one
+                # to join the domain fails with "the SID of the domain you
+                # attempted to join was identical to the SID of this machine".
+                # Ludus's own GOAD blueprint sets sysprep: true on every Windows
+                # host except the first domain controller.
+                vm_config["windows"] = {"sysprep": True}
+            else:
+                vm_config["linux"] = True
+
         self.config["ludus"].append(vm_config)
 
     def add_network_rule(
@@ -191,6 +209,21 @@ class BaseScenarioBuilder:
         
         return siem_config
 
+    def _siem_server_address(self, siem_keyword: str) -> str:
+        """Ludus range address of the SIEM server VM, in template form.
+
+        Ludus expands "{{ range_second_octet }}" per range, so the address stays
+        correct whichever range the config is deployed into.
+        """
+        for vm in self.config.get("ludus", []):
+            name = str(vm.get("vm_name", "")).lower()
+            if siem_keyword and siem_keyword in name and "server" in name:
+                vlan = vm.get("vlan", 10)
+                octet = vm.get("ip_last_octet", 100)
+                return f"10.{{{{ range_second_octet }}}}.{vlan}.{octet}"
+        # No SIEM server in this range: fall back to the conventional slot
+        return "10.{{ range_second_octet }}.10.100"
+
     def add_siem_agents_to_all_vms(self, siem_server_ip: str | None = None, siem_type: SIEMType | None = None) -> None:
         """Add SIEM agent configuration to all VMs in the range."""
         if siem_type is None:
@@ -198,11 +231,6 @@ class BaseScenarioBuilder:
         
         if siem_type == "none":
             return
-        
-        # If no IP provided, calculate from SIEM server config (default: VLAN 10, IP .100)
-        if siem_server_ip is None:
-            # Default SIEM server IP (will be set during deployment)
-            siem_server_ip = "192.168.10.100"  # Default, will be replaced with actual IP
         
         siem_keywords = {
             "wazuh": "wazuh",
@@ -212,7 +240,14 @@ class BaseScenarioBuilder:
         }
         
         siem_keyword = siem_keywords.get(siem_type, "")
-        
+
+        # Derive the SIEM server's address from the VM that actually hosts it.
+        # This used to default to a hardcoded 192.168.10.100 "to be replaced with
+        # actual IP" - which never happened, so every agent was pointed at an
+        # address outside the range and could never register.
+        if siem_server_ip is None:
+            siem_server_ip = self._siem_server_address(siem_keyword)
+
         for vm in self.config["ludus"]:
             # Skip SIEM server itself
             if siem_keyword in vm.get("vm_name", "").lower() and "server" in vm.get("vm_name", "").lower():
@@ -349,6 +384,118 @@ class BaseScenarioBuilder:
                     vm["roles"] = roles_list
                 if role_vars_dict:
                     vm["role_vars"] = role_vars_dict
-        
+
+        self._ensure_referenced_ad_groups_exist(config)
+        self._ensure_unique_windows_hostnames(config)
+
         return config
+
+    # Windows NetBIOS names are capped at 15 characters, and Ludus rejects a
+    # config whose Windows hostnames collide once truncated to that length.
+    NETBIOS_MAX = 15
+
+    def _ensure_unique_windows_hostnames(self, config: dict[str, Any]) -> None:
+        """Keep Windows hostnames unique within the first 15 characters.
+
+        Hostnames were built as "{{ range_id }}-BLUE-WS01"; with a range ID of
+        any realistic length the distinguishing digits fall past character 15,
+        so "...-BLUE-WS01" and "...-BLUE-WS02" both truncate to the same name
+        and Ludus refuses the config with "duplicate Windows hostname name
+        found". Dropping the range-ID prefix reclaims those characters - Ludus
+        already scopes hostnames per range, and its own GOAD blueprint uses bare
+        hostnames for exactly this reason.
+        """
+        vms = [vm for vm in config.get("ludus", []) or []
+               if isinstance(vm, dict) and "win" in str(vm.get("template", "")).lower()]
+        if not vms:
+            return
+
+        def truncated(name: str, range_id: str = "rangeid") -> str:
+            return name.replace("{{ range_id }}", range_id)[: self.NETBIOS_MAX]
+
+        # Only rewrite when the prefix actually causes a collision
+        seen: dict[str, int] = {}
+        for vm in vms:
+            seen[truncated(str(vm.get("hostname", "")))] = seen.get(
+                truncated(str(vm.get("hostname", ""))), 0) + 1
+        if not any(count > 1 for count in seen.values()):
+            return
+
+        used: set[str] = set()
+        for vm in vms:
+            hostname = str(vm.get("hostname", ""))
+            stripped = hostname.replace("{{ range_id }}-", "").replace("{{ range_id }}", "")
+            candidate = (stripped or hostname)[: self.NETBIOS_MAX]
+            if candidate in used:
+                # Still colliding: replace the tail with a counter
+                for n in range(1, 100):
+                    suffix = str(n)
+                    trimmed = candidate[: self.NETBIOS_MAX - len(suffix)] + suffix
+                    if trimmed not in used:
+                        candidate = trimmed
+                        break
+            used.add(candidate)
+            vm["hostname"] = candidate
+
+    # Groups that a fresh AD install already provides; creating them errors,
+    # but users may be assigned to them.
+    AD_BUILTIN_GROUPS = frozenset({
+        "Domain Users", "Domain Admins", "Domain Guests", "Domain Computers",
+        "Enterprise Admins", "Schema Admins", "Administrators", "Users", "Guests",
+        "Power Users", "Backup Operators", "Remote Desktop Users", "IIS_IUSRS",
+        "Print Operators", "Server Operators", "Account Operators",
+        "Group Policy Creator Owners", "Protected Users", "Remote Management Users",
+    })
+
+    def _ensure_referenced_ad_groups_exist(self, config: dict[str, Any]) -> None:
+        """Create any AD group a user is assigned to but nothing defines.
+
+        Builders derive groups in their own ways and several missed some, which
+        only surfaced an hour into a deployment as
+        "Failed to find the AD object DNs for groups.set. Invalid identities".
+        Reconciling here covers every builder, including future ones.
+        """
+        for vm in config.get("ludus", []) or []:
+            if not isinstance(vm, dict):
+                continue
+            ad = (vm.get("role_vars") or {}).get("ludus_ad")
+            if not isinstance(ad, dict):
+                continue
+
+            groups = ad.setdefault("groups", [])
+            defined = {g.get("name") for g in groups if isinstance(g, dict)}
+            defined |= {g for g in groups if isinstance(g, str)}
+            ou_names = {
+                o.get("name") for o in (ad.get("ous") or []) if isinstance(o, dict)
+            }
+
+            referenced: list[str] = []
+            for user in ad.get("users") or []:
+                if not isinstance(user, dict):
+                    continue
+                user_groups = user.get("groups") or []
+                if isinstance(user_groups, str):
+                    user_groups = [user_groups]
+                referenced.extend(user_groups)
+
+            domain = ad.get("domain") or "corp.local"
+            base_dn = ",".join(f"DC={part}" for part in str(domain).split("."))
+
+            for name in sorted(set(referenced)):
+                if not name or name in defined or name in self.AD_BUILTIN_GROUPS:
+                    continue
+                path = base_dn
+                if "Managers" in name:
+                    dept = name.replace("Managers", "").strip()
+                    if dept in ou_names:
+                        path = f"OU={dept},{base_dn}"
+                elif name in ou_names:
+                    path = f"OU={name},{base_dn}"
+                groups.append({
+                    "name": name,
+                    "scope": "global",
+                    "path": path,
+                    "description": f"{name} group",
+                })
+                defined.add(name)
 

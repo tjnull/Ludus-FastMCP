@@ -101,7 +101,7 @@ Common issues and solutions for Ludus FastMCP.
 1. Verify server works independently:
    ```bash
    ludus-fastmcp --list-tools
-   # Should show 157 tools
+   # Should show 231 tools
    ```
 
 2. Check MCP client configuration:
@@ -312,6 +312,53 @@ Common issues and solutions for Ludus FastMCP.
 
 3. Contact Ludus administrator for elevated access
 
+## Feature Availability Issues
+
+### "Not available on this Ludus server"
+
+**Symptoms:**
+- A tool returns `"available": false` instead of data
+- The message mentions a plugin that is not loaded
+- Most often seen on quota and auto-shutdown tools
+
+**Cause:**
+
+Some Ludus capabilities ship as server plugins. When a plugin is not loaded, the
+API answers with HTTP 404 even though the request was correct. The tools report
+this explicitly so it is not mistaken for a wrong endpoint or a client bug.
+
+**Solutions:**
+
+1. Confirm what your server actually implements:
+   ```
+   Fetch the server OpenAPI spec
+   ```
+
+2. Check whether the feature is licensed. Quotas and auto-shutdown are typically
+   enterprise features. `get_license` shows your entitlements.
+
+3. This is not a client fault and retrying will not help. Use the equivalent
+   `ludus` CLI command to confirm the same result if you want a second opinion.
+
+### "Not implemented by this Ludus server" (HTTP 501)
+
+**Symptoms:**
+- A tool reports HTTP 501
+- `get_range_sshconfig` is the usual example
+
+**Cause:**
+
+The endpoint does not exist in this Ludus build. Unlike a 5xx server error, this
+is permanent.
+
+**Solutions:**
+
+1. Do not retry; the response will not change.
+2. Use an alternative where one exists, e.g. `get_range_etchosts` or
+   `get_range_ansibleinventory` for host and connection details.
+3. Tools that use such an endpoint as one part of a larger result, such as
+   `generate_range_documentation`, continue working and omit that section.
+
 ## Diagnostic Commands
 
 ### Check Server Health
@@ -346,6 +393,29 @@ tail -f ~/.ludus-fastmcp/ludus-fastmcp.log
 # Filter for errors
 grep ERROR ~/.ludus-fastmcp/ludus-fastmcp.log
 ```
+
+### Capture every MCP request and response
+
+When a tool misbehaves, the useful detail is usually what the AI assistant
+actually sent. Set `LOG_LEVEL=DEBUG` and the server records both directions of
+every MCP message, with timing:
+
+```bash
+export LOG_LEVEL=DEBUG
+```
+
+```
+--> request tools/call: {"name":"get_range","arguments":{}}
+<-- request tools/call (1605.61ms): {"content":[{"type":"text","text":"{\"rangeState\":\"SUCCESS\"...
+```
+
+This works when an MCP client spawns the server, which is exactly when there is
+no terminal to watch: stderr stays quiet, but everything is written to
+`~/.ludus-fastmcp/ludus-fastmcp.log`. Payloads are truncated at 2000 characters
+and the file rotates at 5 MB, keeping 3 backups.
+
+If the log location is not writable the server still starts, prints a warning,
+and logs to stderr only.
 
 ### Health Check Tool
 

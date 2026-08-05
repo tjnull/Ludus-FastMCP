@@ -331,8 +331,20 @@ class ScenarioManager:
         role_status = {}
         if ensure_roles:
             logger.info("Checking required Ludus roles before deployment...")
+            # The authoritative role list lives in the scenario's config, which
+            # is not built until further down. Build a throwaway copy here purely
+            # to discover the roles - otherwise roles referenced only by the
+            # config (ludus.docker, ludus.wifichallenge) are never installed and
+            # Ludus rejects the deploy.
+            roles_config = None
+            try:
+                preview = await self.get_scenario_config(scenario_key, siem_type=siem_type)
+                roles_config = preview.get("config", preview) if isinstance(preview, dict) else None
+            except Exception as e:
+                logger.warning(f"Could not pre-build the config for role discovery: {e}")
+
             role_status = await self.role_manager.ensure_roles_for_scenario(
-                scenario_key, auto_install=True, siem_type=siem_type
+                scenario_key, auto_install=True, siem_type=siem_type, config=roles_config
             )
             logger.info(f"Role status: {role_status['status']}")
 
@@ -383,6 +395,23 @@ class ScenarioManager:
 
         # Log what we're deploying for verification
         range_name = config.get("name", "Unknown")
+
+        # The Ludus range ID is NOT the scenario's display name. Substituting the
+        # display name into "{{ range_id }}" produced VM names that never matched
+        # the ones already in the range, so the selective cleanup below kept every
+        # existing VM and appended the scenario's on top - duplicating them and
+        # tripping "duplicate vlan and ip_last_octet combination found".
+        range_id = None
+        try:
+            range_info = await self.client.get_range(user_id)
+            range_id = range_info.get("rangeID")
+        except Exception as e:
+            logger.warning(f"Could not resolve the range ID ({e}); falling back to the config name")
+        range_id = range_id or range_name
+
+        def _resolved(vm_name: str) -> str:
+            """Normalise a VM name so both sides of a comparison use the real range ID."""
+            return (vm_name or "").replace("{{ range_id }}", range_id).replace("{{range_id}}", range_id)
         logger.info(f"✓ Successfully built scenario: {name}")
         logger.info(f"✓ Range name: {range_name}")
         logger.info(f"✓ Configuration contains {len(vms)} VMs:")
@@ -409,8 +438,7 @@ class ScenarioManager:
                     vm_name = vm.get('vm_name', '')
                     if vm_name:
                         # Replace {{ range_id }} with actual range_name to get the real VM name
-                        actual_vm_name = vm_name.replace('{{ range_id }}', range_name)
-                        expected_vm_names.add(actual_vm_name)
+                        expected_vm_names.add(_resolved(vm_name))
                 
                 if expected_vm_names:
                     # Filter out VMs that match this scenario's VM names
@@ -419,7 +447,7 @@ class ScenarioManager:
                     vms_to_remove_names = []
                     
                     for current_vm in current_vms:
-                        current_vm_name = current_vm.get('vm_name', '')
+                        current_vm_name = _resolved(current_vm.get('vm_name', ''))
                         # Check if this VM belongs to this scenario (exact name match)
                         if current_vm_name in expected_vm_names:
                             vms_to_remove_names.append(current_vm_name)
@@ -435,9 +463,9 @@ class ScenarioManager:
                         for vm in vms:
                             vm_copy = vm.copy()
                             if 'vm_name' in vm_copy:
-                                vm_copy['vm_name'] = vm_copy['vm_name'].replace('{{ range_id }}', range_name)
+                                vm_copy['vm_name'] = _resolved(vm_copy['vm_name'])
                             if 'hostname' in vm_copy:
-                                vm_copy['hostname'] = vm_copy['hostname'].replace('{{ range_id }}', range_name)
+                                vm_copy['hostname'] = _resolved(vm_copy['hostname'])
                             new_vms_with_replaced_names.append(vm_copy)
                         # Merge: keep existing non-scenario VMs + add new scenario VMs
                         config['ludus'] = vms_to_keep + new_vms_with_replaced_names
@@ -449,9 +477,9 @@ class ScenarioManager:
                         for vm in vms:
                             vm_copy = vm.copy()
                             if 'vm_name' in vm_copy:
-                                vm_copy['vm_name'] = vm_copy['vm_name'].replace('{{ range_id }}', range_name)
+                                vm_copy['vm_name'] = _resolved(vm_copy['vm_name'])
                             if 'hostname' in vm_copy:
-                                vm_copy['hostname'] = vm_copy['hostname'].replace('{{ range_id }}', range_name)
+                                vm_copy['hostname'] = _resolved(vm_copy['hostname'])
                             new_vms_with_replaced_names.append(vm_copy)
                         config['ludus'] = vms_to_keep + new_vms_with_replaced_names
                         logger.info(f"Final config: {len(vms_to_keep)} existing VMs + {len(new_vms_with_replaced_names)} new scenario VMs = {len(config['ludus'])} total")
@@ -460,9 +488,9 @@ class ScenarioManager:
                         # Replace {{ range_id }} in all VMs
                         for vm in config['ludus']:
                             if 'vm_name' in vm:
-                                vm['vm_name'] = vm['vm_name'].replace('{{ range_id }}', range_name)
+                                vm['vm_name'] = _resolved(vm['vm_name'])
                             if 'hostname' in vm:
-                                vm['hostname'] = vm['hostname'].replace('{{ range_id }}', range_name)
+                                vm['hostname'] = _resolved(vm['hostname'])
                 else:
                     logger.info("No VM names in scenario config - deploying fresh")
             else:
@@ -473,12 +501,12 @@ class ScenarioManager:
         
         # IMPORTANT: Replace {{ range_id }} in all VM names and hostnames before sending
         # This must happen after selective cleanup but before sending to API
-        logger.info(f"Replacing {{ range_id }} template with actual range name: {range_name}")
+        logger.info(f"Replacing {{ range_id }} template with the real range ID: {range_id}")
         for vm in config.get('ludus', []):
             if 'vm_name' in vm:
-                vm['vm_name'] = vm['vm_name'].replace('{{ range_id }}', range_name)
+                vm['vm_name'] = _resolved(vm['vm_name'])
             if 'hostname' in vm:
-                vm['hostname'] = vm['hostname'].replace('{{ range_id }}', range_name)
+                vm['hostname'] = _resolved(vm['hostname'])
         
         # IMPORTANT: Set the configuration first, then deploy
         # The Ludus API requires the config to be set via PUT /range/config before deploying
@@ -528,7 +556,11 @@ class ScenarioManager:
             logger.info(f"Stored config has {stored_vm_count} VMs (expected {len(vms)})")
             
             # Log details for debugging
-            if stored_vm_count != len(vms):
+            # The selective merge above intentionally KEEPS VMs that belong to
+            # other scenarios or custom configs, so the stored config can legally
+            # hold more VMs than this scenario defines. Only a shortfall means
+            # the write failed; the subset check below catches anything missing.
+            if stored_vm_count < len(vms):
                 logger.error(f"VM COUNT MISMATCH:")
                 logger.error(f"  Expected: {len(vms)} VMs")
                 logger.error(f"  Stored: {stored_vm_count} VMs")
@@ -538,7 +570,7 @@ class ScenarioManager:
                 
                 error_msg = (
                     f"CONFIGURATION VERIFICATION FAILED: "
-                    f"Expected {len(vms)} VMs but stored config has {stored_vm_count} VMs. "
+                    f"Expected at least {len(vms)} VMs but stored config has {stored_vm_count}. "
                     f"The configuration was not properly set in Ludus. "
                     f"Aborting deployment to prevent using incorrect configuration. "
                     f"Please check Ludus API logs for details."
@@ -546,9 +578,13 @@ class ScenarioManager:
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
-            # Verify key VMs are present
-            expected_vm_names = {vm.get('vm_name') for vm in vms if vm.get('vm_name')}
-            stored_vm_names = {vm.get('vm_name') for vm in stored_vms if isinstance(stored_vms, list) and vm.get('vm_name')}
+            # Verify key VMs are present. Both sides must be normalised: `vms`
+            # still holds the "{{ range_id }}" template form while the stored
+            # config comes back with the range ID resolved, so comparing them raw
+            # reported every VM as missing.
+            expected_vm_names = {_resolved(vm.get('vm_name')) for vm in vms if vm.get('vm_name')}
+            stored_vm_names = {_resolved(vm.get('vm_name')) for vm in stored_vms
+                               if isinstance(stored_vms, list) and vm.get('vm_name')}
             
             if expected_vm_names and not expected_vm_names.issubset(stored_vm_names):
                 missing = expected_vm_names - stored_vm_names

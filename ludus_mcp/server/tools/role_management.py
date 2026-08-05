@@ -12,6 +12,23 @@ from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_respon
 logger = None
 
 
+async def _scenario_config(client, scenario_key: str, siem_type: str) -> dict | None:
+    """Build a scenario's config so its roles can be read from it directly.
+
+    Returns None if it cannot be built - callers then fall back to inferring
+    roles from the scenario key.
+    """
+    try:
+        from ludus_mcp.scenarios.scenario_manager import ScenarioManager
+
+        result = await ScenarioManager(client).get_scenario_config(
+            scenario_key, siem_type=siem_type
+        )
+        return result.get("config", result) if isinstance(result, dict) else None
+    except Exception:  # pragma: no cover - best effort only
+        return None
+
+
 def create_role_management_tools(client: LudusAPIClient) -> FastMCP:
     """Create MCP tools for managing Ansible role installation."""
     global logger
@@ -256,8 +273,9 @@ def create_role_management_tools(client: LudusAPIClient) -> FastMCP:
         )
         try:
             # Get required roles
+            scenario_config = await _scenario_config(client, scenario_key, siem_type)
             role_status = await role_manager.ensure_roles_for_scenario(
-                scenario_key, auto_install=False, siem_type=siem_type
+                scenario_key, auto_install=False, siem_type=siem_type, config=scenario_config
             )
             
             return format_tool_response({
@@ -308,7 +326,7 @@ def create_role_management_tools(client: LudusAPIClient) -> FastMCP:
         Example:
             # Configure with SSH key (recommended)
             result = await configure_ssh_role_installation(
-                ssh_host="192.168.10.3",
+                ssh_host="198.51.100.1",
                 ssh_user="root",
                 ssh_key_path="~/.ssh/id_rsa",
                 allow_ssh_install=True
@@ -316,7 +334,7 @@ def create_role_management_tools(client: LudusAPIClient) -> FastMCP:
             
             # Configure with password (less secure)
             result = await configure_ssh_role_installation(
-                ssh_host="192.168.10.3",
+                ssh_host="198.51.100.1",
                 ssh_user="root",
                 ssh_password="your-password",
                 allow_ssh_install=True
@@ -451,8 +469,9 @@ def create_role_management_tools(client: LudusAPIClient) -> FastMCP:
         try:
             logger.info(f"Ensuring roles for scenario: {scenario_key} (SIEM: {siem_type}, auto_install: {auto_install})")
             
+            scenario_config = await _scenario_config(client, scenario_key, siem_type)
             role_status = await role_manager.ensure_roles_for_scenario(
-                scenario_key, auto_install=auto_install, siem_type=siem_type
+                scenario_key, auto_install=auto_install, siem_type=siem_type, config=scenario_config
             )
             
             # Format the response

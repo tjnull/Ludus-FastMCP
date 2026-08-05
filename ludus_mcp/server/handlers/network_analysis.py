@@ -187,25 +187,49 @@ class NetworkAnalysisHandler:
             range_config = await self.client.get_range_config(user_id)
 
             vms = range_info.get("VMs", [])
-            networks = range_config.get("ludus", {}).get("network", [])
+
+            # A Ludus config has no list of network objects: "ludus" is the list
+            # of VMs and "network" is a top-level block of inter-VLAN rules.
+            # Reading range_config["ludus"]["network"] raised
+            # "'list' object has no attribute 'get'" on every call.
+            config_vms = range_config.get("ludus", [])
+            if isinstance(config_vms, dict):
+                config_vms = config_vms.get("vms", [])
+            network_block = range_config.get("network")
+            vlan_rules = network_block.get("rules", []) if isinstance(network_block, dict) else []
 
             # Build network topology
             topology = {
                 "networks": [],
                 "vms": [],
-                "connections": []
+                "connections": [],
+                "inter_vlan_rules": vlan_rules,
+                "inter_vlan_default": (
+                    network_block.get("inter_vlan_default")
+                    if isinstance(network_block, dict) else None
+                ),
             }
 
-            # Process networks
-            for net in networks:
-                network_info = {
-                    "name": net.get("name", "unknown"),
-                    "vlan": net.get("vlan"),
-                    "subnet": net.get("subnet", "unknown"),
-                    "gateway": net.get("gateway"),
-                    "type": net.get("type", "internal")
-                }
-                topology["networks"].append(network_info)
+            # Networks are the distinct VLANs the VMs sit on
+            vlan_members: dict[Any, list[str]] = {}
+            for vm in config_vms:
+                if not isinstance(vm, dict):
+                    continue
+                vlan = vm.get("vlan")
+                if vlan is None:
+                    continue
+                vlan_members.setdefault(vlan, []).append(
+                    vm.get("vm_name") or vm.get("hostname") or "unknown"
+                )
+            for vlan in sorted(vlan_members, key=lambda v: (v is None, v)):
+                topology["networks"].append({
+                    "name": f"VLAN {vlan}",
+                    "vlan": vlan,
+                    "subnet": f"10.x.{vlan}.0/24",
+                    "gateway": f"10.x.{vlan}.254",
+                    "type": "internal",
+                    "vms": vlan_members[vlan],
+                })
 
             # Process VMs and their connections
             for vm in vms:
@@ -313,7 +337,7 @@ class NetworkAnalysisHandler:
             logs = await self.client.get_range_logs(user_id)
 
             vms = range_info.get("VMs", [])
-            networks = range_config.get("ludus", {}).get("network", [])
+            networks = (range_config.get("network") or {}).get("rules", [])
 
             issues = []
             warnings = []

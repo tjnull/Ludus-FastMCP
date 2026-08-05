@@ -17,6 +17,19 @@ class DocumentationHandler:
         """Initialize the documentation handler."""
         self.client = client
 
+    async def _optional_ssh_config(self, user_id: str | None) -> str:
+        """Fetch the SSH config, tolerating servers that do not provide one.
+
+        /range/sshconfig returns HTTP 501 on some Ludus builds. It is a
+        convenience section of the document, so letting it fail would throw away
+        an otherwise complete set of range documentation.
+        """
+        try:
+            return await self.client.get_range_sshconfig(user_id)
+        except Exception as e:
+            logger.warning(f"SSH config unavailable, omitting from documentation: {e}")
+            return "SSH config is not available from this Ludus server."
+
     async def generate_range_documentation(
         self,
         format: str = "markdown",
@@ -27,7 +40,7 @@ class DocumentationHandler:
         try:
             range_info = await self.client.get_range(user_id)
             range_config = await self.client.get_range_config(user_id)
-            ssh_config = await self.client.get_range_sshconfig(user_id)
+            ssh_config = await self._optional_ssh_config(user_id)
 
             vms = range_info.get("VMs", [])
 
@@ -195,7 +208,7 @@ class DocumentationHandler:
         """Generate student/participant lab guides."""
         try:
             range_info = await self.client.get_range(user_id)
-            ssh_config = await self.client.get_range_sshconfig(user_id)
+            ssh_config = await self._optional_ssh_config(user_id)
 
             vms = range_info.get("VMs", [])
 

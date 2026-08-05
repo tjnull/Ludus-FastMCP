@@ -6,6 +6,7 @@ from ludus_mcp.core.client import LudusAPIClient
 from ludus_mcp.server.handlers.metrics import MetricsHandler
 from ludus_mcp.server.handlers.inventory import InventoryHandler
 from ludus_mcp.server.handlers.network_analysis import NetworkAnalysisHandler
+from ludus_mcp.server.handlers.automation_orchestration import AutomationOrchestrationHandler
 from ludus_mcp.server.tools.utils import LazyHandlerRegistry, format_tool_response
 
 
@@ -39,20 +40,18 @@ def create_metrics_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def get_deployment_metrics(
-        deployment_id: str | None = None,
         user_id: str | None = None
     ) -> dict:
-        """Get metrics for a specific deployment.
+        """Get metrics for the current deployment.
 
         Args:
-            deployment_id: Optional deployment ID (defaults to current)
             user_id: Optional user ID (admin only)
 
         Returns:
             Deployment metrics
         """
         handler = registry.get_handler("metrics", MetricsHandler)
-        result = await handler.get_deployment_metrics(deployment_id, user_id)
+        result = await handler.get_deployment_metrics(user_id=user_id)
         return format_tool_response(result)
 
     @mcp.tool()
@@ -72,23 +71,22 @@ def create_metrics_tools(client: LudusAPIClient) -> FastMCP:
     @mcp.tool()
     async def export_metrics(
         format: str = "json",
-        start_time: str | None = None,
-        end_time: str | None = None,
         user_id: str | None = None
     ) -> dict:
         """Export metrics data.
 
+        Exports the current range metrics; the Ludus API has no historical
+        metrics range to query, so there is no start/end time filter.
+
         Args:
             format: Export format (json, csv, prometheus)
-            start_time: Optional start time for metrics (ISO format)
-            end_time: Optional end time for metrics (ISO format)
             user_id: Optional user ID (admin only)
 
         Returns:
             Exported metrics data
         """
         handler = registry.get_handler("metrics", MetricsHandler)
-        result = await handler.export_metrics(format, start_time, end_time, user_id)
+        result = await handler.export_metrics(format=format, user_id=user_id)
         return format_tool_response(result)
 
     # ==================== INVENTORY TOOLS ====================
@@ -149,19 +147,17 @@ def create_metrics_tools(client: LudusAPIClient) -> FastMCP:
 
     @mcp.tool()
     async def test_network_connectivity(
-        source_vm: str,
-        target_vm: str,
-        protocol: str = "tcp",
-        port: int | None = None,
+        source_vm: str | None = None,
+        target_vm: str | None = None,
+        test_type: str = "comprehensive",
         user_id: str | None = None
     ) -> dict:
         """Test network connectivity between VMs.
 
         Args:
-            source_vm: Source VM name
-            target_vm: Target VM name
-            protocol: Protocol to test (tcp, udp, icmp)
-            port: Optional port number for tcp/udp
+            source_vm: Source VM name (omit to test from all VMs)
+            target_vm: Target VM name (omit to test to all VMs)
+            test_type: Type of test (ping, comprehensive, port_scan)
             user_id: Optional user ID (admin only)
 
         Returns:
@@ -169,7 +165,8 @@ def create_metrics_tools(client: LudusAPIClient) -> FastMCP:
         """
         handler = registry.get_handler("network_analysis", NetworkAnalysisHandler)
         result = await handler.test_network_connectivity(
-            source_vm, target_vm, protocol, port, user_id
+            source_vm=source_vm, target_vm=target_vm,
+            test_type=test_type, user_id=user_id
         )
         return format_tool_response(result)
 
@@ -204,41 +201,26 @@ def create_metrics_tools(client: LudusAPIClient) -> FastMCP:
     @mcp.tool()
     async def capture_network_traffic(
         vm_name: str,
-        interface: str = "eth0",
-        duration: int = 60,
-        filter: str | None = None,
+        duration_seconds: int = 60,
+        filter_expression: str | None = None,
         user_id: str | None = None
     ) -> dict:
         """Capture network traffic on a VM.
 
         Args:
             vm_name: VM name to capture traffic from
-            interface: Network interface to capture on
-            duration: Capture duration in seconds
-            filter: Optional BPF filter expression
+            duration_seconds: Capture duration in seconds
+            filter_expression: Optional BPF filter (e.g. "tcp port 80")
             user_id: Optional user ID (admin only)
 
         Returns:
-            Traffic capture result with download link
+            Traffic capture result
         """
         handler = registry.get_handler("network_analysis", NetworkAnalysisHandler)
         result = await handler.capture_network_traffic(
-            vm_name, interface, duration, filter, user_id
+            vm_name=vm_name, duration_seconds=duration_seconds,
+            filter_expression=filter_expression, user_id=user_id
         )
-        return format_tool_response(result)
-
-    @mcp.tool()
-    async def visualize_range(user_id: str | None = None) -> dict:
-        """Generate visualization data for the range.
-
-        Args:
-            user_id: Optional user ID (admin only)
-
-        Returns:
-            Visualization data (network diagram, topology, etc.)
-        """
-        handler = registry.get_handler("network_analysis", NetworkAnalysisHandler)
-        result = await handler.visualize_range(user_id)
         return format_tool_response(result)
 
     @mcp.tool()
@@ -251,8 +233,8 @@ def create_metrics_tools(client: LudusAPIClient) -> FastMCP:
         Returns:
             Health check results for all VMs
         """
-        handler = registry.get_handler("metrics", MetricsHandler)
-        result = await handler.health_checks(user_id)
+        handler = registry.get_handler("automation", AutomationOrchestrationHandler)
+        result = await handler.health_checks(user_id=user_id)
         return format_tool_response(result)
 
     return mcp
